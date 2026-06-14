@@ -853,6 +853,48 @@ class DisenoMuro:
         lw = self.d.lw_m
         bw = self.d.bw_m
 
+        def draw_hook_135(ax, x, y, orient="right_up", size=0.03, linewidth=1.8):
+            """
+            Dibuja esquemáticamente un gancho de 135°.
+            Las orientaciones disponibles solo buscan representarlo de forma clara en el gráfico.
+            """
+            if orient == "right_up":
+                ax.plot([x, x + size], [y, y], linewidth=linewidth)
+                ax.plot([x + size, x + 0.45*size], [y, y + 0.55*size], linewidth=linewidth)
+            elif orient == "right_down":
+                ax.plot([x, x + size], [y, y], linewidth=linewidth)
+                ax.plot([x + size, x + 0.45*size], [y, y - 0.55*size], linewidth=linewidth)
+            elif orient == "left_up":
+                ax.plot([x, x - size], [y, y], linewidth=linewidth)
+                ax.plot([x - size, x - 0.45*size], [y, y + 0.55*size], linewidth=linewidth)
+            elif orient == "left_down":
+                ax.plot([x, x - size], [y, y], linewidth=linewidth)
+                ax.plot([x - size, x - 0.45*size], [y, y - 0.55*size], linewidth=linewidth)
+
+        def draw_estribo_cerrado_135(ax, x0, y0, w, h, rec, linewidth=1.3, hook_size=0.026):
+            """
+            Dibuja el estribo cerrado del borde y muestra esquemáticamente ganchos de 135°
+            en dos extremos del lazo.
+            """
+            xi = x0 + rec
+            yi = y0 + rec
+            wi = w - 2*rec
+            hi = h - 2*rec
+
+            ax.add_patch(Rectangle((xi, yi), wi, hi, fill=False, linewidth=linewidth))
+
+            # Ganchos de 135° esquemáticos en dos esquinas opuestas
+            draw_hook_135(ax, xi, yi + hi, orient="right_down", size=hook_size, linewidth=linewidth+0.5)
+            draw_hook_135(ax, xi + wi, yi, orient="left_up", size=hook_size, linewidth=linewidth+0.5)
+
+        def draw_vincha_135(ax, x1, x2, y, linewidth=2.8, hook_size=0.026):
+            """
+            Dibuja una vincha paralela a lw con ganchos de 135° en ambos extremos.
+            """
+            ax.plot([x1, x2], [y, y], linewidth=linewidth)
+            draw_hook_135(ax, x1, y, orient="right_down", size=hook_size, linewidth=linewidth*0.8)
+            draw_hook_135(ax, x2, y, orient="left_up", size=hook_size, linewidth=linewidth*0.8)
+
         ax.add_patch(Rectangle((0, 0), lw, bw, fill=False, linewidth=2.2))
 
         if b["requiere_borde_especial"]:
@@ -866,20 +908,23 @@ class DisenoMuro:
             ax.plot([lw - lbe, lw - lbe], [0, bw], linestyle="--", linewidth=1.2)
 
             # Estribos esquemáticos en los bordes.
-            # El estribo cerrado siempre se dibuja.
-            # Las vinchas interiores se dibujan paralelas a lw (horizontales en planta).
+            # El estribo cerrado siempre se dibuja con ganchos de 135°.
+            # Las vinchas interiores se dibujan paralelas a lw con ganchos de 135°.
             rec = 0.035
             n_vinchas = int(b.get("n_vinchas", 0))
             for x0 in [0, lw - lbe]:
-                ax.add_patch(Rectangle((x0 + rec, rec), lbe - 2*rec, bw - 2*rec, fill=False, linewidth=1.2))
+                draw_estribo_cerrado_135(ax, x0, 0, lbe, bw, rec, linewidth=1.3, hook_size=0.022)
 
                 if n_vinchas > 0:
                     for i in range(n_vinchas):
                         yv = rec + (bw - 2*rec) * (i + 1) / (n_vinchas + 1)
-                        ax.plot(
-                            [x0 + rec, x0 + lbe - rec],
-                            [yv, yv],
-                            linewidth=2.4
+                        draw_vincha_135(
+                            ax,
+                            x0 + rec,
+                            x0 + lbe - rec,
+                            yv,
+                            linewidth=2.8,
+                            hook_size=0.020
                         )
 
             # Barras de borde según la distribución ingresada por el usuario:
