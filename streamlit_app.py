@@ -400,12 +400,28 @@ class DisenoMuro:
 
         s1 = self.bw_cm / 4.0
         s2 = 6.0 * db_long_cm
-        s0 = (100.0 + (350.0 - hx_mm) / 3.0) / 10.0
-        s = min(s1, s2, s0)
+
+        # Expresión tipo ACI/NEC para s0.
+        # IMPORTANTE: s0 no debe hacerse negativo cuando hx es grande.
+        # Usamos la limitación usual: s0 no mayor que 150 mm y no menor que 100 mm.
+        s0_mm_raw = 100.0 + (350.0 - hx_mm) / 3.0
+        s0_mm = min(150.0, max(100.0, s0_mm_raw))
+        s0 = s0_mm / 10.0
+
+        candidatos_s = {
+            "bw/4": s1,
+            "6db longitudinal": s2,
+            "s0(hx)": s0,
+        }
+        s = min(candidatos_s.values())
+        controla_s = min(candidatos_s, key=candidatos_s.get)
+
+        # Seguridad numérica: no permitir separación negativa o cero.
+        s = max(s, 1e-6)
 
         # En el ejemplo gobierna 0.09*s*bc*fc/fyt.
-        Ash1_req = 0.09 * s * self.d.bc_ash_1_cm * self.d.fc_kgcm2 / self.d.fyt_kgcm2
-        Ash2_req = 0.09 * s * self.d.bc_ash_2_cm * self.d.fc_kgcm2 / self.d.fyt_kgcm2
+        Ash1_req = max(0.09 * s * self.d.bc_ash_1_cm * self.d.fc_kgcm2 / self.d.fyt_kgcm2, 0.0)
+        Ash2_req = max(0.09 * s * self.d.bc_ash_2_cm * self.d.fc_kgcm2 / self.d.fyt_kgcm2, 0.0)
 
         area_estribo = area_barra_cm2(self.d.db_estribo_mm)
 
@@ -639,6 +655,10 @@ class DisenoMuro:
             lines.append(f"- **c = {b['c_cm']:.1f} cm**")
             lines.append(f"- **c/lw = {b['c_sobre_lw']:.3f}**")
             lines.append(f"- **lbe = {b['lbe_cm']:.1f} cm**")
+            if b['lbe_cm'] > self.lw_cm:
+                lines.append("- Advertencia: **lbe calculado es mayor que lw**; en la práctica se debe confinar todo el muro o revisar el desplazamiento δu usado.")
+            elif b['lbe_cm'] > self.lw_cm / 2:
+                lines.append("- Advertencia: **los elementos de borde se traslapan**; en la práctica puede requerirse confinar prácticamente todo el muro.")
             lines.append(f"- **ldh = {b['ldh_cm']:.1f} cm**")
             lines.append(f"- Modo de hx: **{b['modo_hx']}**")
             lines.append(f"- Recubrimiento libre ingresado: **{b['recubrimiento_libre_cm']:.1f} cm**")
@@ -647,6 +667,11 @@ class DisenoMuro:
             lines.append(f"- Separación automática en Y: **{b['hx_sy_cm']:.1f} cm**")
             lines.append(f"- hx automático estimado: **{b['hx_auto_mm']:.0f} mm**")
             lines.append(f"- **hx usado para calcular s y Ash = {b['hx_mm']:.0f} mm**")
+            lines.append(f"- Límite s1 = bw/4: **{b['s1_bw_4_cm']:.1f} cm**")
+            lines.append(f"- Límite s2 = 6db longitudinal: **{b['s2_6db_cm']:.1f} cm**")
+            lines.append(f"- s0 bruto por hx: **{b['s0_raw_mm']:.0f} mm**")
+            lines.append(f"- s0 usado, limitado entre 100 y 150 mm: **{b['s0_usado_cm']:.1f} cm**")
+            lines.append(f"- Controla la separación: **{b['controla_s']}**")
             lines.append(f"- **s estribos = {b['s_estribos_cm']:.1f} cm**")
             lines.append(f"- **Ash1 = {b['Ash1_req_cm2']:.2f} cm² → {b['n_ramas_Ash1']} ramas Ø{self.d.db_estribo_mm:.0f}**")
             lines.append(f"- **Ash2 = {b['Ash2_req_cm2']:.2f} cm² → {b['n_ramas_Ash2']} ramas Ø{self.d.db_estribo_mm:.0f}**")

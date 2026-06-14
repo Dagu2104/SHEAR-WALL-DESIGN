@@ -4,26 +4,32 @@
 
 ```bash
 pip install -r requirements.txt
-streamlit run streamlit_app_hx_recubrimiento_puro.py
+streamlit run streamlit_app_hx_s_corregido.py
 ```
 
-## Cambio incorporado
+## Corrección incorporada
 
-La app ahora pide el **recubrimiento libre/puro** del cabezal o muro, por ejemplo 4 cm.
+Se corrigió el cálculo de la separación de estribos cuando `hx` resulta grande.
 
-Para calcular hx automático, el programa calcula internamente:
+Antes, la expresión:
 
 ```text
-distancia al centro de barra extrema =
-recubrimiento libre + Ø estribo + Ø barra longitudinal / 2
+s0 = 100 + (350 - hx) / 3
 ```
 
-Luego calcula:
+podía dar negativa si `hx > 650 mm`.
+
+Ahora se limita `s0` entre 100 mm y 150 mm:
 
 ```text
-separación en X = (lbe - 2·distancia_centro_barra) / (n_intermedias_x + 1)
-separación en Y = (bw - 2·distancia_centro_barra) / (n_intermedias_y + 1)
-hx = mayor separación entre X e Y
+s0_bruto = 100 + (350 - hx) / 3
+s0_usado = min(150, max(100, s0_bruto))
 ```
 
-También se mantiene la opción de ingresar `hx` manualmente cuando el detalle real tenga vinchas, ganchos o ramales adicionales.
+Luego:
+
+```text
+s = min(bw/4, 6db longitudinal, s0_usado)
+```
+
+La memoria reporta qué límite controla la separación.
