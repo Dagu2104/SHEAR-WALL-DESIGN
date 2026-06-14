@@ -428,6 +428,18 @@ class DisenoMuro:
         n_ramas_1 = n_barras_requeridas(Ash1_req, self.d.db_estribo_mm)
         n_ramas_2 = n_barras_requeridas(Ash2_req, self.d.db_estribo_mm)
 
+        # Detalle esquemático concatenado con los ramales requeridos.
+        # Un estribo cerrado aporta 2 ramas en una dirección.
+        # Si se requieren más de 2 ramas, se agregan vinchas interiores.
+        n_ramas_control = max(n_ramas_1, n_ramas_2)
+        n_vinchas = max(0, n_ramas_control - 2)
+        if n_vinchas == 0:
+            detalle_estribos = f"Estribo cerrado Ø{self.d.db_estribo_mm:.0f} @ {s:.1f} cm"
+        elif n_vinchas == 1:
+            detalle_estribos = f"Estribo cerrado Ø{self.d.db_estribo_mm:.0f} + 1 vincha Ø{self.d.db_estribo_mm:.0f} @ {s:.1f} cm"
+        else:
+            detalle_estribos = f"Estribo cerrado Ø{self.d.db_estribo_mm:.0f} + {n_vinchas} vinchas Ø{self.d.db_estribo_mm:.0f} @ {s:.1f} cm"
+
         return {
             **borde,
             "ldh_cm": ldh,
@@ -452,7 +464,9 @@ class DisenoMuro:
             "n_ramas_Ash2": n_ramas_2,
             "Ash1_colocado_cm2": n_ramas_1 * area_estribo,
             "Ash2_colocado_cm2": n_ramas_2 * area_estribo,
-            "detalle_estribos": f"Estribo Ø{self.d.db_estribo_mm:.0f} + vincha Ø{self.d.db_estribo_mm:.0f} @ {s:.1f} cm",
+            "n_ramas_control": n_ramas_control,
+            "n_vinchas": n_vinchas,
+            "detalle_estribos": detalle_estribos,
         }
 
     # --------------------------------------------------------
@@ -680,6 +694,8 @@ class DisenoMuro:
             lines.append(f"- **s estribos = {b['s_estribos_cm']:.1f} cm**")
             lines.append(f"- **Ash1 = {b['Ash1_req_cm2']:.2f} cm² → {b['n_ramas_Ash1']} ramas Ø{self.d.db_estribo_mm:.0f}**")
             lines.append(f"- **Ash2 = {b['Ash2_req_cm2']:.2f} cm² → {b['n_ramas_Ash2']} ramas Ø{self.d.db_estribo_mm:.0f}**")
+            lines.append(f"- Ramales que controlan el detalle: **{b['n_ramas_control']}**")
+            lines.append(f"- Vinchas interiores requeridas en el esquema: **{b['n_vinchas']}**")
             lines.append(f"- Detalle de confinamiento: **{b['detalle_estribos']}**")
         else:
             lines.append("- ¿Requiere elemento especial de borde?: **NO**")
@@ -849,11 +865,18 @@ class DisenoMuro:
             ax.plot([lbe, lbe], [0, bw], linestyle="--", linewidth=1.2)
             ax.plot([lw - lbe, lw - lbe], [0, bw], linestyle="--", linewidth=1.2)
 
-            # Estribos esquemáticos en los bordes
+            # Estribos esquemáticos en los bordes.
+            # El estribo cerrado siempre se dibuja.
+            # Las vinchas interiores se dibujan solo si los ramales requeridos superan 2.
             rec = 0.035
+            n_vinchas = int(b.get("n_vinchas", 0))
             for x0 in [0, lw - lbe]:
                 ax.add_patch(Rectangle((x0 + rec, rec), lbe - 2*rec, bw - 2*rec, fill=False, linewidth=1.2))
-                ax.plot([x0 + lbe/2, x0 + lbe/2], [rec, bw - rec], linewidth=1.0)
+
+                if n_vinchas > 0:
+                    for i in range(n_vinchas):
+                        xv = x0 + rec + (lbe - 2*rec) * (i + 1) / (n_vinchas + 1)
+                        ax.plot([xv, xv], [rec, bw - rec], linewidth=1.0)
 
             # Barras de borde según la distribución ingresada por el usuario:
             # 4 esquinas + intermedias en X + intermedias en Y.
