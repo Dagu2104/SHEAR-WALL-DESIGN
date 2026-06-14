@@ -4,32 +4,15 @@
 
 ```bash
 pip install -r requirements.txt
-streamlit run streamlit_app_hx_s_corregido.py
+streamlit run streamlit_app.py
 ```
 
 ## Corrección incorporada
 
-Se corrigió el cálculo de la separación de estribos cuando `hx` resulta grande.
+Se corrigió la representación gráfica de las vinchas en el corte transversal en planta:
 
-Antes, la expresión:
+- ahora las **vinchas se dibujan paralelas a `lw`**,
+- ya no se dibujan perpendiculares,
+- y la línea de la vincha se hizo **más gruesa** para distinguirla mejor.
 
-```text
-s0 = 100 + (350 - hx) / 3
-```
-
-podía dar negativa si `hx > 650 mm`.
-
-Ahora se limita `s0` entre 100 mm y 150 mm:
-
-```text
-s0_bruto = 100 + (350 - hx) / 3
-s0_usado = min(150, max(100, s0_bruto))
-```
-
-Luego:
-
-```text
-s = min(bw/4, 6db longitudinal, s0_usado)
-```
-
-La memoria reporta qué límite controla la separación.
+En el ZIP, el archivo principal se llama `streamlit_app.py` para Streamlit Cloud.

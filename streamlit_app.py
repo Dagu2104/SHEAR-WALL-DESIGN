@@ -867,7 +867,7 @@ class DisenoMuro:
 
             # Estribos esquemáticos en los bordes.
             # El estribo cerrado siempre se dibuja.
-            # Las vinchas interiores se dibujan solo si los ramales requeridos superan 2.
+            # Las vinchas interiores se dibujan paralelas a lw (horizontales en planta).
             rec = 0.035
             n_vinchas = int(b.get("n_vinchas", 0))
             for x0 in [0, lw - lbe]:
@@ -875,8 +875,12 @@ class DisenoMuro:
 
                 if n_vinchas > 0:
                     for i in range(n_vinchas):
-                        xv = x0 + rec + (lbe - 2*rec) * (i + 1) / (n_vinchas + 1)
-                        ax.plot([xv, xv], [rec, bw - rec], linewidth=1.0)
+                        yv = rec + (bw - 2*rec) * (i + 1) / (n_vinchas + 1)
+                        ax.plot(
+                            [x0 + rec, x0 + lbe - rec],
+                            [yv, yv],
+                            linewidth=2.4
+                        )
 
             # Barras de borde según la distribución ingresada por el usuario:
             # 4 esquinas + intermedias en X + intermedias en Y.
