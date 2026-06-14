@@ -853,23 +853,23 @@ class DisenoMuro:
         lw = self.d.lw_m
         bw = self.d.bw_m
 
-        def draw_hook_135(ax, x, y, orient="right_up", size=0.03, linewidth=1.8):
+        def draw_hook_135(ax, x, y, orient="right_up", size=0.03, linewidth=1.8, color="black"):
             """
             Dibuja esquemáticamente un gancho de 135°.
-            Las orientaciones disponibles solo buscan representarlo de forma clara en el gráfico.
             """
+            kw = dict(linewidth=linewidth, color=color, solid_capstyle="round")
             if orient == "right_up":
-                ax.plot([x, x + size], [y, y], linewidth=linewidth)
-                ax.plot([x + size, x + 0.45*size], [y, y + 0.55*size], linewidth=linewidth)
+                ax.plot([x, x + size], [y, y], **kw)
+                ax.plot([x + size, x + 0.45*size], [y, y + 0.55*size], **kw)
             elif orient == "right_down":
-                ax.plot([x, x + size], [y, y], linewidth=linewidth)
-                ax.plot([x + size, x + 0.45*size], [y, y - 0.55*size], linewidth=linewidth)
+                ax.plot([x, x + size], [y, y], **kw)
+                ax.plot([x + size, x + 0.45*size], [y, y - 0.55*size], **kw)
             elif orient == "left_up":
-                ax.plot([x, x - size], [y, y], linewidth=linewidth)
-                ax.plot([x - size, x - 0.45*size], [y, y + 0.55*size], linewidth=linewidth)
+                ax.plot([x, x - size], [y, y], **kw)
+                ax.plot([x - size, x - 0.45*size], [y, y + 0.55*size], **kw)
             elif orient == "left_down":
-                ax.plot([x, x - size], [y, y], linewidth=linewidth)
-                ax.plot([x - size, x - 0.45*size], [y, y - 0.55*size], linewidth=linewidth)
+                ax.plot([x, x - size], [y, y], **kw)
+                ax.plot([x - size, x - 0.45*size], [y, y - 0.55*size], **kw)
 
         def draw_estribo_cerrado_135(ax, x0, y0, w, h, rec, linewidth=1.3, hook_size=0.026):
             """
@@ -881,19 +881,43 @@ class DisenoMuro:
             wi = w - 2*rec
             hi = h - 2*rec
 
-            ax.add_patch(Rectangle((xi, yi), wi, hi, fill=False, linewidth=linewidth))
+            ax.add_patch(Rectangle((xi, yi), wi, hi, fill=False, linewidth=linewidth, edgecolor="black"))
 
             # Ganchos de 135° esquemáticos en dos esquinas opuestas
-            draw_hook_135(ax, xi, yi + hi, orient="right_down", size=hook_size, linewidth=linewidth+0.5)
-            draw_hook_135(ax, xi + wi, yi, orient="left_up", size=hook_size, linewidth=linewidth+0.5)
+            draw_hook_135(ax, xi, yi + hi, orient="right_down", size=hook_size, linewidth=linewidth+0.6, color="black")
+            draw_hook_135(ax, xi + wi, yi, orient="left_up", size=hook_size, linewidth=linewidth+0.6, color="black")
 
-        def draw_vincha_135(ax, x1, x2, y, linewidth=2.8, hook_size=0.026):
+        def draw_vincha_135(ax, x1, x2, y, linewidth=3.2, hook_size=0.034):
             """
-            Dibuja una vincha paralela a lw con ganchos de 135° en ambos extremos.
+            Dibuja una vincha paralela a lw con ganchos de 135° bien visibles en ambos extremos.
             """
-            ax.plot([x1, x2], [y, y], linewidth=linewidth)
-            draw_hook_135(ax, x1, y, orient="right_down", size=hook_size, linewidth=linewidth*0.8)
-            draw_hook_135(ax, x2, y, orient="left_up", size=hook_size, linewidth=linewidth*0.8)
+            color = "black"
+            margen = max(hook_size * 1.15, 0.032)
+
+            # Cuerpo de la vincha ligeramente recortado para que los ganchos se distingan.
+            ax.plot(
+                [x1 + margen, x2 - margen],
+                [y, y],
+                linewidth=linewidth,
+                color=color,
+                solid_capstyle="round"
+            )
+
+            # Gancho izquierdo y derecho, saliendo hacia afuera de la vincha.
+            draw_hook_135(
+                ax, x1 + margen, y,
+                orient="left_up",
+                size=hook_size,
+                linewidth=linewidth * 0.9,
+                color=color
+            )
+            draw_hook_135(
+                ax, x2 - margen, y,
+                orient="right_down",
+                size=hook_size,
+                linewidth=linewidth * 0.9,
+                color=color
+            )
 
         ax.add_patch(Rectangle((0, 0), lw, bw, fill=False, linewidth=2.2))
 

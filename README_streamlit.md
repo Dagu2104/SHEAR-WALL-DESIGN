@@ -7,12 +7,11 @@ pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
 
-## Cambio incorporado
+## Mejora incorporada
 
-En el gráfico del **corte transversal en planta**:
+Se mejoró la visibilidad de los ganchos de 135° en las **vinchas** del corte transversal:
 
-- el **estribo cerrado** ahora se dibuja mostrando esquemáticamente **ganchos de 135°**,
-- las **vinchas** también se dibujan con **ganchos de 135° en ambos extremos**,
-- y las vinchas siguen mostrándose **paralelas a `lw`**.
-
-En el ZIP, el archivo principal se llama `streamlit_app.py` para usarlo directamente en Streamlit Cloud.
+- ahora los ganchos se dibujan en **negro**,
+- son **más grandes**,
+- el cuerpo de la vincha se recorta un poco para que los ganchos se distingan mejor,
+- y siguen mostrándose **paralelos a `lw`**.
