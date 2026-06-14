@@ -64,9 +64,9 @@ class DatosMuro:
     rho_vertical: float = 0.0025
     rho_horizontal: float = 0.0025
 
-    # Deriva de diseño para condición de borde.
-    # En el ejemplo se calibra para obtener c/lw ≈ 0.25.
-    deriva_u_sobre_hw: float = 0.0044444444
+    # Desplazamiento máximo de techo para condición de borde.
+    # El programa calcula internamente δu/hw = desplazamiento_techo / hw.
+    desplazamiento_techo_cm: float = 14.96
 
     # Armado colocado por el usuario
     db_borde_mm: float = 14.0
@@ -89,10 +89,19 @@ class DatosMuro:
     # Parámetros del equilibrio usado en el ejemplo
     xp_factor_lw: float = 0.095
 
-    # Parámetros para Ash del ejemplo
+    # Parámetros para Ash
     bc_ash_1_cm: float = 40.0
     bc_ash_2_cm: float = 26.7
-    hx_mm: float = 200.0
+
+    # Recubrimiento/posición de barras para estimar automáticamente hx.
+    # hx se calcula con lbe, bw, recubrimiento y barras intermedias en X/Y.
+    recubrimiento_cabezal_cm: float = 5.5
+
+    # Modo de cálculo de hx:
+    # - "auto": calcula hx internamente.
+    # - "manual": usa hx_manual_mm ingresado por el usuario.
+    modo_hx: str = "auto"
+    hx_manual_mm: float = 200.0
 
     # Compresión axial predominante
     k_compresion: float = 1.0
@@ -282,7 +291,8 @@ class DisenoMuro:
 
         pu_agfc = self.d.Pu_tonf * 1000.0 / (self.Ag_cm2 * self.d.fc_kgcm2)
 
-        denom = 600.0 * (1.5 * self.d.deriva_u_sobre_hw)
+        delta_u_sobre_hw = (self.d.desplazamiento_techo_cm / self.hw_cm) if self.hw_cm > 0 else 0.0
+        denom = 600.0 * (1.5 * delta_u_sobre_hw)
         c_cm = self.lw_cm / denom if denom > 0 else float("inf")
         c_sobre_lw = c_cm / self.lw_cm
 
@@ -297,11 +307,64 @@ class DisenoMuro:
         return {
             "requiere_borde_especial": requiere_borde_especial,
             "Pu_sobre_Agfc": pu_agfc,
+            "desplazamiento_techo_cm": self.d.desplazamiento_techo_cm,
+            "delta_u_sobre_hw": delta_u_sobre_hw,
             "c_cm": c_cm,
             "c_sobre_lw": c_sobre_lw,
             "lbe_cm": lbe_cm,
             "motivo": "Se revisan elementos especiales de borde porque existe flexo-compresión en el plano del muro.",
         }
+
+
+    def calcular_hx_mm(self, lbe_cm: float) -> Dict[str, Any]:
+        """
+        Calcula hx automáticamente o toma hx manual según el modo elegido.
+
+        Concepto:
+        hx es la mayor separación centro a centro entre barras longitudinales
+        consecutivas que están soportadas lateralmente por estribos, vinchas o ganchos.
+
+        Si el detalle real tiene más vinchas/ramales que el modelo automático,
+        conviene usar modo manual e ingresar el hx real medido del detalle.
+        """
+        rec_cm = max(0.0, self.d.recubrimiento_cabezal_cm)
+        x_libre_cm = max(lbe_cm - 2.0 * rec_cm, 0.0)
+        y_libre_cm = max(self.bw_cm - 2.0 * rec_cm, 0.0)
+
+        n_x = max(0, int(self.d.n_barras_intermedias_x))
+        n_y = max(0, int(self.d.n_barras_intermedias_y))
+
+        # Separación máxima entre barras en las caras largas X.
+        sx_cm = x_libre_cm / (n_x + 1) if (n_x + 1) > 0 else x_libre_cm
+
+        # Separación máxima entre barras en las caras cortas Y.
+        sy_cm = y_libre_cm / (n_y + 1) if (n_y + 1) > 0 else y_libre_cm
+
+        hx_auto_cm = max(sx_cm, sy_cm)
+        hx_auto_mm = hx_auto_cm * 10.0
+
+        if str(self.d.modo_hx).lower().startswith("manual"):
+            hx_mm = max(1.0, float(self.d.hx_manual_mm))
+            hx_cm = hx_mm / 10.0
+            modo_usado = "manual"
+        else:
+            hx_mm = hx_auto_mm
+            hx_cm = hx_auto_cm
+            modo_usado = "automático"
+
+        return {
+            "modo_hx": modo_usado,
+            "recubrimiento_cabezal_cm": rec_cm,
+            "x_libre_cm": x_libre_cm,
+            "y_libre_cm": y_libre_cm,
+            "sx_cm": sx_cm,
+            "sy_cm": sy_cm,
+            "hx_auto_cm": hx_auto_cm,
+            "hx_auto_mm": hx_auto_mm,
+            "hx_cm": hx_cm,
+            "hx_mm": hx_mm,
+        }
+
 
     # --------------------------------------------------------
     # 4. DETALLAMIENTO DE BORDE
@@ -321,10 +384,13 @@ class DisenoMuro:
             0.076 * self.d.fy_kgcm2 * db_long_cm / sqrt(self.d.fc_kgcm2),
         )
 
-        # Espaciamiento de estribos. En el ejemplo controla bw/4 = 7.5 cm.
+        # Espaciamiento de estribos. hx se calcula automáticamente desde el detalle de barras.
+        hx_info = self.calcular_hx_mm(borde["lbe_cm"])
+        hx_mm = hx_info["hx_mm"]
+
         s1 = self.bw_cm / 4.0
         s2 = 6.0 * db_long_cm
-        s0 = (100.0 + (350.0 - self.d.hx_mm) / 3.0) / 10.0
+        s0 = (100.0 + (350.0 - hx_mm) / 3.0) / 10.0
         s = min(s1, s2, s0)
 
         # En el ejemplo gobierna 0.09*s*bc*fc/fyt.
@@ -340,6 +406,14 @@ class DisenoMuro:
             **borde,
             "ldh_cm": ldh,
             "s_estribos_cm": s,
+            "modo_hx": hx_info["modo_hx"],
+            "hx_mm": hx_mm,
+            "hx_cm": hx_info["hx_cm"],
+            "hx_auto_mm": hx_info["hx_auto_mm"],
+            "hx_auto_cm": hx_info["hx_auto_cm"],
+            "hx_sx_cm": hx_info["sx_cm"],
+            "hx_sy_cm": hx_info["sy_cm"],
+            "recubrimiento_cabezal_cm": hx_info["recubrimiento_cabezal_cm"],
             "Ash1_req_cm2": Ash1_req,
             "Ash2_req_cm2": Ash2_req,
             "n_ramas_Ash1": n_ramas_1,
@@ -548,11 +622,19 @@ class DisenoMuro:
         if b["requiere_borde_especial"]:
             lines.append("- ¿Requiere elemento especial de borde?: **SÍ**")
             lines.append("- Interpretación: el cabezal se exige por **confinamiento del borde comprimido**, aunque el acero adicional por flexión pueda salir igual a cero.")
+            lines.append(f"- Desplazamiento máximo de techo: **δu = {b['desplazamiento_techo_cm']:.2f} cm**")
+            lines.append(f"- Relación calculada: **δu/hw = {b['delta_u_sobre_hw']:.6f}**")
             lines.append(f"- **Pu/(Ag·f'c) = {b['Pu_sobre_Agfc']:.3f}**")
             lines.append(f"- **c = {b['c_cm']:.1f} cm**")
             lines.append(f"- **c/lw = {b['c_sobre_lw']:.3f}**")
             lines.append(f"- **lbe = {b['lbe_cm']:.1f} cm**")
             lines.append(f"- **ldh = {b['ldh_cm']:.1f} cm**")
+            lines.append(f"- Modo de hx: **{b['modo_hx']}**")
+            lines.append(f"- Recubrimiento/posición usado para hx automático: **{b['recubrimiento_cabezal_cm']:.1f} cm**")
+            lines.append(f"- Separación automática en X: **{b['hx_sx_cm']:.1f} cm**")
+            lines.append(f"- Separación automática en Y: **{b['hx_sy_cm']:.1f} cm**")
+            lines.append(f"- hx automático estimado: **{b['hx_auto_mm']:.0f} mm**")
+            lines.append(f"- **hx usado para calcular s y Ash = {b['hx_mm']:.0f} mm**")
             lines.append(f"- **s estribos = {b['s_estribos_cm']:.1f} cm**")
             lines.append(f"- **Ash1 = {b['Ash1_req_cm2']:.2f} cm² → {b['n_ramas_Ash1']} ramas Ø{self.d.db_estribo_mm:.0f}**")
             lines.append(f"- **Ash2 = {b['Ash2_req_cm2']:.2f} cm² → {b['n_ramas_Ash2']} ramas Ø{self.d.db_estribo_mm:.0f}**")
@@ -860,11 +942,45 @@ def main():
         with st.expander("Cuantías y parámetros avanzados"):
             rho_vertical = st.number_input("ρ vertical mínima", min_value=0.0, value=0.0025, step=0.0001, format="%.5f")
             rho_horizontal = st.number_input("ρ horizontal mínima", min_value=0.0, value=0.0025, step=0.0001, format="%.5f")
-            deriva_u_sobre_hw = st.number_input("δu/hw", min_value=0.0001, value=0.0044444444, step=0.0001, format="%.6f")
+            desplazamiento_techo_cm = st.number_input(
+                "Desplazamiento máximo de techo δu [cm]",
+                min_value=0.01,
+                value=14.96,
+                step=0.10,
+                format="%.2f",
+                help="Valor tomado del análisis estructural. El programa calcula internamente δu/hw = δu / hw."
+            )
             xp_factor_lw = st.number_input("xp/lw", min_value=0.0, max_value=1.0, value=0.095, step=0.005, format="%.3f")
             bc_ash_1_cm = st.number_input("bc Ash1 [cm]", min_value=1.0, value=40.0, step=1.0, format="%.1f")
             bc_ash_2_cm = st.number_input("bc Ash2 [cm]", min_value=1.0, value=26.7, step=0.1, format="%.1f")
-            hx_mm = st.number_input("hx [mm]", min_value=1.0, value=200.0, step=5.0, format="%.0f")
+            modo_hx_ui = st.radio(
+                "Cálculo de hx",
+                ["Calcular hx automáticamente", "Ingresar hx manualmente"],
+                index=0,
+                help="Usa manual cuando tu detalle real tenga vinchas/ramales adicionales y quieras ingresar el hx real medido entre barras soportadas."
+            )
+
+            recubrimiento_cabezal_cm = st.number_input(
+                "Recubrimiento/posición de barras para hx automático [cm]",
+                min_value=0.0,
+                value=5.5,
+                step=0.5,
+                format="%.1f",
+                help="Distancia desde el borde exterior hasta el centro de la barra extrema. Solo afecta si hx se calcula automáticamente."
+            )
+
+            hx_manual_mm = 200.0
+            if modo_hx_ui == "Ingresar hx manualmente":
+                hx_manual_mm = st.number_input(
+                    "hx manual [mm]",
+                    min_value=1.0,
+                    value=200.0,
+                    step=5.0,
+                    format="%.0f",
+                    help="Ingresa el hx real de tu detalle: mayor separación centro a centro entre barras longitudinales soportadas lateralmente por estribos/vinchas/ganchos."
+                )
+
+            modo_hx = "manual" if modo_hx_ui == "Ingresar hx manualmente" else "auto"
 
         st.subheader("5. Cabezal / elemento de borde")
         db_borde_mm = st.number_input("Ø longitudinal de cabezal [mm]", min_value=6.0, value=20.0, step=1.0, format="%.0f")
@@ -893,7 +1009,7 @@ def main():
         phi_o=phi_o,
         rho_vertical=rho_vertical,
         rho_horizontal=rho_horizontal,
-        deriva_u_sobre_hw=deriva_u_sobre_hw,
+        desplazamiento_techo_cm=desplazamiento_techo_cm,
         db_borde_mm=db_borde_mm,
         n_barras_esquinas=int(n_barras_esquinas),
         n_barras_intermedias_x=int(n_barras_intermedias_x),
@@ -904,7 +1020,9 @@ def main():
         xp_factor_lw=xp_factor_lw,
         bc_ash_1_cm=bc_ash_1_cm,
         bc_ash_2_cm=bc_ash_2_cm,
-        hx_mm=hx_mm,
+        recubrimiento_cabezal_cm=recubrimiento_cabezal_cm,
+        modo_hx=modo_hx,
+        hx_manual_mm=hx_manual_mm,
     )
 
     muro = DisenoMuro(datos)
