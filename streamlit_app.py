@@ -93,9 +93,11 @@ class DatosMuro:
     bc_ash_1_cm: float = 40.0
     bc_ash_2_cm: float = 26.7
 
-    # Recubrimiento/posición de barras para estimar automáticamente hx.
-    # hx se calcula con lbe, bw, recubrimiento y barras intermedias en X/Y.
-    recubrimiento_cabezal_cm: float = 5.5
+    # Recubrimiento libre del elemento de borde.
+    # Para calcular hx automático, el programa obtiene internamente la distancia
+    # al centro de la barra extrema:
+    # rec_libre + db_estribo + db_longitudinal/2.
+    recubrimiento_libre_cm: float = 4.0
 
     # Modo de cálculo de hx:
     # - "auto": calcula hx internamente.
@@ -327,7 +329,14 @@ class DisenoMuro:
         Si el detalle real tiene más vinchas/ramales que el modelo automático,
         conviene usar modo manual e ingresar el hx real medido del detalle.
         """
-        rec_cm = max(0.0, self.d.recubrimiento_cabezal_cm)
+        rec_libre_cm = max(0.0, self.d.recubrimiento_libre_cm)
+        db_estribo_cm = self.d.db_estribo_mm / 10.0
+        db_long_cm = self.d.db_borde_mm / 10.0
+
+        # Distancia desde el borde exterior hasta el centro de la barra extrema.
+        # Se calcula internamente a partir del recubrimiento puro.
+        rec_cm = rec_libre_cm + db_estribo_cm + db_long_cm / 2.0
+
         x_libre_cm = max(lbe_cm - 2.0 * rec_cm, 0.0)
         y_libre_cm = max(self.bw_cm - 2.0 * rec_cm, 0.0)
 
@@ -354,7 +363,8 @@ class DisenoMuro:
 
         return {
             "modo_hx": modo_usado,
-            "recubrimiento_cabezal_cm": rec_cm,
+            "recubrimiento_libre_cm": rec_libre_cm,
+            "distancia_centro_barra_extrema_cm": rec_cm,
             "x_libre_cm": x_libre_cm,
             "y_libre_cm": y_libre_cm,
             "sx_cm": sx_cm,
@@ -413,7 +423,8 @@ class DisenoMuro:
             "hx_auto_cm": hx_info["hx_auto_cm"],
             "hx_sx_cm": hx_info["sx_cm"],
             "hx_sy_cm": hx_info["sy_cm"],
-            "recubrimiento_cabezal_cm": hx_info["recubrimiento_cabezal_cm"],
+            "recubrimiento_libre_cm": hx_info["recubrimiento_libre_cm"],
+            "distancia_centro_barra_extrema_cm": hx_info["distancia_centro_barra_extrema_cm"],
             "Ash1_req_cm2": Ash1_req,
             "Ash2_req_cm2": Ash2_req,
             "n_ramas_Ash1": n_ramas_1,
@@ -630,7 +641,8 @@ class DisenoMuro:
             lines.append(f"- **lbe = {b['lbe_cm']:.1f} cm**")
             lines.append(f"- **ldh = {b['ldh_cm']:.1f} cm**")
             lines.append(f"- Modo de hx: **{b['modo_hx']}**")
-            lines.append(f"- Recubrimiento/posición usado para hx automático: **{b['recubrimiento_cabezal_cm']:.1f} cm**")
+            lines.append(f"- Recubrimiento libre ingresado: **{b['recubrimiento_libre_cm']:.1f} cm**")
+            lines.append(f"- Distancia calculada al centro de barra extrema: **{b['distancia_centro_barra_extrema_cm']:.1f} cm**")
             lines.append(f"- Separación automática en X: **{b['hx_sx_cm']:.1f} cm**")
             lines.append(f"- Separación automática en Y: **{b['hx_sy_cm']:.1f} cm**")
             lines.append(f"- hx automático estimado: **{b['hx_auto_mm']:.0f} mm**")
@@ -960,13 +972,13 @@ def main():
                 help="Usa manual cuando tu detalle real tenga vinchas/ramales adicionales y quieras ingresar el hx real medido entre barras soportadas."
             )
 
-            recubrimiento_cabezal_cm = st.number_input(
-                "Recubrimiento/posición de barras para hx automático [cm]",
+            recubrimiento_libre_cm = st.number_input(
+                "Recubrimiento libre del cabezal/muro [cm]",
                 min_value=0.0,
-                value=5.5,
+                value=4.0,
                 step=0.5,
                 format="%.1f",
-                help="Distancia desde el borde exterior hasta el centro de la barra extrema. Solo afecta si hx se calcula automáticamente."
+                help="Recubrimiento puro hasta el estribo. El programa calcula internamente la distancia al centro de la barra extrema: recubrimiento + Øestribo + Ølongitudinal/2."
             )
 
             hx_manual_mm = 200.0
@@ -1020,7 +1032,7 @@ def main():
         xp_factor_lw=xp_factor_lw,
         bc_ash_1_cm=bc_ash_1_cm,
         bc_ash_2_cm=bc_ash_2_cm,
-        recubrimiento_cabezal_cm=recubrimiento_cabezal_cm,
+        recubrimiento_libre_cm=recubrimiento_libre_cm,
         modo_hx=modo_hx,
         hx_manual_mm=hx_manual_mm,
     )
