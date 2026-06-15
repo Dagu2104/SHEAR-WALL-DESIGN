@@ -61,6 +61,17 @@ class DatosMuro:
     # "modal_espectral" -> omega = 1.2 + N/50
     tipo_analisis_cortante: str = "estatico_equivalente"
 
+    # Revisión de deslizamiento en juntas horizontales de construcción
+    revisar_deslizamiento_juntas: bool = True
+    altura_vaciado_vertical_m: float = 6.0
+    tipo_superficie_junta: str = "Rugosa intencionalmente"
+    mu_friccion: float = 1.0
+    phi_deslizamiento: float = 0.75
+    usar_vu_amplificado_junta: bool = True
+    Vu_junta_tonf: float = 0.0
+    usar_pu_junta: bool = True
+    Nu_junta_tonf: float = 0.0
+
     # Materiales
     fc_kgcm2: float = 280.0
     fy_kgcm2: float = 4200.0
@@ -572,6 +583,74 @@ class DisenoMuro:
         }
 
     # --------------------------------------------------------
+    # 6. DESLIZAMIENTO EN JUNTAS HORIZONTALES DE CONSTRUCCIÓN
+    # --------------------------------------------------------
+    def revision_deslizamiento_juntas(self) -> Dict[str, Any]:
+        """
+        Revisa el deslizamiento en juntas horizontales de construcción mediante
+        cortante por fricción.
+
+        Aplica cuando el muro se funde por etapas verticales, por ejemplo cada 6 m.
+        En una junta horizontal, el acero que cruza el plano es el acero vertical:
+        acero vertical del alma + acero vertical de los dos cabezales.
+        """
+        if not self.d.revisar_deslizamiento_juntas:
+            return {
+                "revisar": False,
+                "mensaje": "No se activó la revisión de deslizamiento en juntas horizontales de construcción.",
+            }
+
+        cort = self.diseno_cortante()
+        fx = self.diseno_flexocompresion()
+
+        altura_vaciado_m = max(self.d.altura_vaciado_vertical_m, 0.01)
+        n_juntas = max(0, ceil(self.d.hw_m / altura_vaciado_m) - 1)
+
+        Vu_junta = cort["Vu_amplificado_tonf"] if self.d.usar_vu_amplificado_junta else self.d.Vu_junta_tonf
+        Nu_junta = self.d.Pu_tonf if self.d.usar_pu_junta else self.d.Nu_junta_tonf
+
+        # Acero vertical que cruza la junta horizontal.
+        # Alma: se considera el acero vertical real en dos caras a lo largo de todo Lw.
+        area_web = area_barra_cm2(self.d.db_web_mm)
+        As_vertical_alma_por_metro = 2.0 * area_web * 100.0 / self.d.s_web_cm
+        As_vertical_alma_total = As_vertical_alma_por_metro * self.d.lw_m
+
+        # Cabezales: acero longitudinal colocado en un cabezal por ambos extremos.
+        if fx.get("modo") == "FLEXO_COMPRESION_EN_EL_PLANO":
+            As_cabezal_uno = fx.get("As2_colocado_cm2", 0.0)
+            As_cabezales_total = 2.0 * As_cabezal_uno
+        else:
+            As_cabezal_uno = 0.0
+            As_cabezales_total = 0.0
+
+        Avf_cm2 = As_vertical_alma_total + As_cabezales_total
+
+        # Vn = μ(Avf·fy + Nu), en tonf.
+        # Avf·fy queda en kgf; se divide para 1000.
+        Vn_tonf = self.d.mu_friccion * (Avf_cm2 * self.d.fy_kgcm2 + Nu_junta * 1000.0) / 1000.0
+        phiVn_tonf = self.d.phi_deslizamiento * Vn_tonf
+
+        return {
+            "revisar": True,
+            "altura_vaciado_vertical_m": altura_vaciado_m,
+            "numero_juntas_horizontales_estimadas": n_juntas,
+            "tipo_superficie_junta": self.d.tipo_superficie_junta,
+            "mu_friccion": self.d.mu_friccion,
+            "phi_deslizamiento": self.d.phi_deslizamiento,
+            "Vu_junta_tonf": Vu_junta,
+            "Nu_junta_tonf": Nu_junta,
+            "As_vertical_alma_por_metro_cm2_m": As_vertical_alma_por_metro,
+            "As_vertical_alma_total_cm2": As_vertical_alma_total,
+            "As_cabezal_uno_cm2": As_cabezal_uno,
+            "As_cabezales_total_cm2": As_cabezales_total,
+            "Avf_cm2": Avf_cm2,
+            "Vn_deslizamiento_tonf": Vn_tonf,
+            "phiVn_deslizamiento_tonf": phiVn_tonf,
+            "cumple_deslizamiento": phiVn_tonf >= Vu_junta,
+            "mensaje": "Revisión por cortante-fricción en junta horizontal de construcción.",
+        }
+
+    # --------------------------------------------------------
     # 6. RESULTADO GENERAL
     # --------------------------------------------------------
     def resolver(self) -> Dict[str, Any]:
@@ -589,6 +668,7 @@ class DisenoMuro:
             "flexocompresion_o_compresion": self.diseno_flexocompresion(),
             "borde": self.detallamiento_borde(),
             "acero_distribuido": self.acero_distribuido(),
+            "deslizamiento_juntas": self.revision_deslizamiento_juntas(),
         }
 
     # --------------------------------------------------------
@@ -672,6 +752,7 @@ class DisenoMuro:
         fx = r["flexocompresion_o_compresion"]
         b = r["borde"]
         web = r["acero_distribuido"]
+        desl = r["deslizamiento_juntas"]
         val = self.validar_ejemplo_documento()
 
         lines = []
@@ -722,7 +803,7 @@ class DisenoMuro:
         lines.append(f"- **bw requerido = {c['bw_req_cm']:.1f} cm**")
         lines.append(f"- Compresión diagonal: **{'CUMPLE' if c['cumple_compresion_diagonal'] else 'NO CUMPLE'}**")
         lines.append(f"- Tensión diagonal: **{'CUMPLE' if c['cumple_tension_diagonal'] else 'NO CUMPLE'}**")
-        lines.append(f"- Deslizamiento: **{c['revision_deslizamiento']}**")
+        lines.append("- Deslizamiento: **se revisa en la sección de juntas horizontales de construcción cuando está activado.**")
         lines.append("")
 
         lines.append("## 5. Compresión axial o flexo-compresión")
@@ -811,7 +892,26 @@ class DisenoMuro:
         lines.append(f"- Cuantía horizontal mínima: **{'CUMPLE' if web['cumple_rho_horizontal'] else 'NO CUMPLE'}**")
         lines.append("")
 
-        lines.append("## 8. Validación")
+        lines.append("## 8. Deslizamiento en juntas horizontales de construcción")
+        if desl["revisar"]:
+            lines.append(f"- Altura máxima de vaciado vertical considerada: **{desl['altura_vaciado_vertical_m']:.2f} m**")
+            lines.append(f"- Número estimado de juntas horizontales: **{desl['numero_juntas_horizontales_estimadas']}**")
+            lines.append(f"- Tipo de superficie: **{desl['tipo_superficie_junta']}**")
+            lines.append(f"- Coeficiente de fricción: **μ = {desl['mu_friccion']:.2f}**")
+            lines.append(f"- Factor de reducción: **φ = {desl['phi_deslizamiento']:.2f}**")
+            lines.append(f"- Cortante usado en la junta: **Vu_junta = {desl['Vu_junta_tonf']:.2f} tonf**")
+            lines.append(f"- Compresión normal usada en la junta: **Nu_junta = {desl['Nu_junta_tonf']:.2f} tonf**")
+            lines.append(f"- Acero vertical del alma que cruza la junta: **{desl['As_vertical_alma_total_cm2']:.2f} cm²**")
+            lines.append(f"- Acero vertical de cabezales que cruza la junta: **{desl['As_cabezales_total_cm2']:.2f} cm²**")
+            lines.append(f"- Acero total que cruza la junta: **Avf = {desl['Avf_cm2']:.2f} cm²**")
+            lines.append(f"- **Vn = μ(Avf·fy + Nu) = {desl['Vn_deslizamiento_tonf']:.2f} tonf**")
+            lines.append(f"- **φVn = {desl['phiVn_deslizamiento_tonf']:.2f} tonf**")
+            lines.append(f"- Veredicto deslizamiento: **{'CUMPLE' if desl['cumple_deslizamiento'] else 'NO CUMPLE'}**")
+        else:
+            lines.append(f"- {desl['mensaje']}")
+        lines.append("")
+
+        lines.append("## 9. Validación")
         if val["aplica_validacion"]:
             lines.append(f"- Validación contra el ejemplo de páginas 128–137: **{'OK' if val['ok_validacion'] else 'REVISAR'}**")
             lines.append(f"- Tolerancia relativa usada: **{val['tolerancia_relativa']:.0%}**")
@@ -1198,6 +1298,7 @@ def generar_memoria_word(datos, muro, fig_long, fig_trans, info_memoria):
     fx = r["flexocompresion_o_compresion"]
     b = r["borde"]
     web = r["acero_distribuido"]
+    desl = r["deslizamiento_juntas"]
 
     doc = Document()
 
@@ -1439,7 +1540,34 @@ def generar_memoria_word(datos, muro, fig_long, fig_trans, info_memoria):
     ]
     add_table_from_rows(doc, web_rows, col_widths=[2.6, 3.4])
 
-    doc.add_heading("8. Esquemas de armado", level=1)
+    doc.add_heading("8. Revisión por deslizamiento en juntas horizontales de construcción", level=1)
+    if desl["revisar"]:
+        doc.add_paragraph(
+            f"Debido a que el muro puede fundirse por etapas verticales de aproximadamente "
+            f"{desl['altura_vaciado_vertical_m']:.2f} m, se generan juntas horizontales de construcción. "
+            "En dichos planos se revisa la transferencia de cortante por fricción, considerando el acero vertical "
+            "que atraviesa la junta, la compresión normal actuante y la condición de rugosidad de la superficie."
+        )
+        add_equation_paragraph(doc, "Acero que cruza la junta:", f"Avf = As_alma + As_cabezales = {desl['Avf_cm2']:.2f} cm²")
+        add_equation_paragraph(doc, "Resistencia nominal:", f"Vn = μ(Avf·fy + Nu) = {desl['Vn_deslizamiento_tonf']:.2f} tonf")
+        add_equation_paragraph(doc, "Resistencia de diseño:", f"φVn = {desl['phi_deslizamiento']:.2f}·Vn = {desl['phiVn_deslizamiento_tonf']:.2f} tonf")
+        desl_rows = [
+            ["Resultado", "Valor"],
+            ["Altura de vaciado vertical", f"{desl['altura_vaciado_vertical_m']:.2f} m"],
+            ["Juntas horizontales estimadas", f"{desl['numero_juntas_horizontales_estimadas']}"],
+            ["Tipo de superficie", desl["tipo_superficie_junta"]],
+            ["μ", f"{desl['mu_friccion']:.2f}"],
+            ["Vu_junta", f"{desl['Vu_junta_tonf']:.2f} tonf"],
+            ["Nu_junta", f"{desl['Nu_junta_tonf']:.2f} tonf"],
+            ["Avf", f"{desl['Avf_cm2']:.2f} cm²"],
+            ["φVn", f"{desl['phiVn_deslizamiento_tonf']:.2f} tonf"],
+            ["Veredicto", "CUMPLE" if desl["cumple_deslizamiento"] else "NO CUMPLE"],
+        ]
+        add_table_from_rows(doc, desl_rows, col_widths=[2.8, 3.2])
+    else:
+        doc.add_paragraph("No se activó la revisión de deslizamiento en juntas horizontales de construcción.")
+
+    doc.add_heading("9. Esquemas de armado", level=1)
     doc.add_paragraph(
         "A continuación se presentan los esquemas gráficos generados con los datos ingresados. "
         "Las figuras son referenciales para la memoria y muestran la ubicación de los elementos de borde, "
@@ -1463,7 +1591,7 @@ def generar_memoria_word(datos, muro, fig_long, fig_trans, info_memoria):
         p.add_run("Figura 2. Corte transversal en planta del muro.").bold = True
         doc.add_picture(str(trans_path), width=Inches(6.5))
 
-    doc.add_heading("9. Conclusión", level=1)
+    doc.add_heading("10. Conclusión", level=1)
     conclusiones = []
     conclusiones.append("La validación del espesor mínimo " + ("cumple." if esp["cumple_espesor"] else "no cumple."))
     conclusiones.append("La revisión por cortante en el plano del muro " + ("cumple." if c["cumple_cortante"] else "no cumple."))
@@ -1472,6 +1600,8 @@ def generar_memoria_word(datos, muro, fig_long, fig_trans, info_memoria):
     else:
         conclusiones.append("La revisión por compresión axial predominante " + ("cumple." if fx["cumple_axial"] else "no cumple."))
     conclusiones.append("El acero distribuido del alma " + ("cumple las cuantías mínimas." if web["cumple_rho_vertical"] and web["cumple_rho_horizontal"] else "no cumple alguna cuantía mínima."))
+    if desl["revisar"]:
+        conclusiones.append("La revisión por deslizamiento en juntas horizontales de construcción " + ("cumple." if desl["cumple_deslizamiento"] else "no cumple."))
     for item in conclusiones:
         doc.add_paragraph(item, style=None)
 
@@ -1535,6 +1665,63 @@ def main():
         phi_flexion = st.number_input("φ flexión", min_value=0.10, max_value=1.00, value=0.90, step=0.01, format="%.2f")
         phi_o = st.number_input("φo sobrerresistencia", min_value=0.10, value=1.40, step=0.05, format="%.2f")
 
+        with st.expander("Deslizamiento en juntas horizontales de construcción"):
+            revisar_deslizamiento_juntas = st.checkbox(
+                "Revisar juntas horizontales de construcción",
+                value=True,
+                help="Activar cuando el muro se funde por etapas verticales y se generan juntas horizontales."
+            )
+            altura_vaciado_vertical_m = st.number_input(
+                "Altura máxima de vaciado vertical [m]",
+                min_value=0.10,
+                value=6.00,
+                step=0.10,
+                format="%.2f",
+                help="Por ejemplo, si el muro se funde en etapas de 6 m, se generan juntas horizontales cada 6 m aproximadamente."
+            )
+            tipo_superficie_junta = st.selectbox(
+                "Tipo de superficie de junta",
+                ["Monolítica", "Rugosa intencionalmente", "Lisa/no rugosa", "Hormigón contra acero o conexión especial", "Personalizado"],
+                index=1,
+                help="Selecciona la condición de rugosidad/adherencia del plano de construcción."
+            )
+
+            mu_default = {
+                "Monolítica": 1.40,
+                "Rugosa intencionalmente": 1.00,
+                "Lisa/no rugosa": 0.60,
+                "Hormigón contra acero o conexión especial": 0.70,
+                "Personalizado": 1.00,
+            }[tipo_superficie_junta]
+
+            mu_friccion = st.number_input(
+                "Coeficiente de fricción μ",
+                min_value=0.00,
+                value=float(mu_default),
+                step=0.05,
+                format="%.2f",
+                help='Valores orientativos usados en la app:\n• Hormigón monolítico: μ = 1.40\n• Junta rugosa intencionalmente: μ = 1.00\n• Junta lisa/no rugosa: μ = 0.60\n• Hormigón contra acero o conexión especial: μ = 0.70\n\nEstos valores son editables. Para proyecto definitivo, confirmar con la norma aplicable y el criterio del revisor.\n'
+            )
+            phi_deslizamiento = st.number_input("φ deslizamiento", min_value=0.10, max_value=1.00, value=0.75, step=0.01, format="%.2f")
+
+            usar_vu_amplificado_junta = st.checkbox(
+                "Usar Vu amplificado como Vu_junta",
+                value=True,
+                help="Si se desactiva, puedes ingresar el cortante específico en la junta horizontal."
+            )
+            Vu_junta_tonf = 0.0
+            if not usar_vu_amplificado_junta:
+                Vu_junta_tonf = st.number_input("Vu_junta [tonf]", min_value=0.0, value=60.0, step=1.0, format="%.2f")
+
+            usar_pu_junta = st.checkbox(
+                "Usar Pu como Nu_junta",
+                value=True,
+                help="Si se desactiva, puedes ingresar la compresión normal específica sobre la junta."
+            )
+            Nu_junta_tonf = 0.0
+            if not usar_pu_junta:
+                Nu_junta_tonf = st.number_input("Nu_junta [tonf]", min_value=0.0, value=352.0, step=1.0, format="%.2f")
+
         with st.expander("Cuantías y parámetros avanzados"):
             rho_vertical = st.number_input("ρ vertical mínima", min_value=0.0, value=0.0025, step=0.0001, format="%.5f")
             rho_horizontal = st.number_input("ρ horizontal mínima", min_value=0.0, value=0.0025, step=0.0001, format="%.5f")
@@ -1596,6 +1783,15 @@ def main():
         n_pisos=int(n_pisos),
         tiene_vigas_acople=tiene_vigas_acople,
         tipo_analisis_cortante=tipo_analisis_cortante,
+        revisar_deslizamiento_juntas=revisar_deslizamiento_juntas,
+        altura_vaciado_vertical_m=altura_vaciado_vertical_m,
+        tipo_superficie_junta=tipo_superficie_junta,
+        mu_friccion=mu_friccion,
+        phi_deslizamiento=phi_deslizamiento,
+        usar_vu_amplificado_junta=usar_vu_amplificado_junta,
+        Vu_junta_tonf=Vu_junta_tonf,
+        usar_pu_junta=usar_pu_junta,
+        Nu_junta_tonf=Nu_junta_tonf,
         fc_kgcm2=fc_kgcm2,
         fy_kgcm2=fy_kgcm2,
         fyt_kgcm2=fyt_kgcm2,
@@ -1640,9 +1836,10 @@ def main():
     cortante = resultados["cortante"]
     borde = resultados["borde"]
     web = resultados["acero_distribuido"]
+    desl = resultados["deslizamiento_juntas"]
 
     st.subheader("Resumen rápido")
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     col1.metric("Modo", resultados["modo"].replace("_", " "))
     col2.metric("Espesor", "CUMPLE" if espesor["cumple_espesor"] else "NO CUMPLE")
     col3.metric("Vu' [tonf]", f"{cortante['Vu_amplificado_tonf']:.2f}")
@@ -1651,6 +1848,10 @@ def main():
         col5.metric("Acero borde", "CUMPLE" if fx["cumple_acero_borde"] else "NO CUMPLE")
     else:
         col5.metric("Axial", "CUMPLE" if fx["cumple_axial"] else "NO CUMPLE")
+    if desl["revisar"]:
+        col6.metric("Deslizamiento", "CUMPLE" if desl["cumple_deslizamiento"] else "NO CUMPLE")
+    else:
+        col6.metric("Deslizamiento", "No revisado")
 
     tab_memoria, tab_graficos, tab_tablas, tab_validacion = st.tabs(["Memoria", "Gráficos", "Tablas", "Validación"] )
 
@@ -1718,6 +1919,8 @@ def main():
         st.dataframe(dict_to_df(borde), use_container_width=True)
         st.markdown("### Acero distribuido del alma")
         st.dataframe(dict_to_df(web), use_container_width=True)
+        st.markdown("### Deslizamiento en juntas horizontales")
+        st.dataframe(dict_to_df(desl), use_container_width=True)
 
     with tab_validacion:
         val = muro.validar_ejemplo_documento()

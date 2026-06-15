@@ -7,27 +7,17 @@ pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
 
-## Cambios incorporados
+## Cambio incorporado
 
-Esta versión agrega:
+Se agregó la revisión de **deslizamiento en juntas horizontales de construcción** para muros fundidos por etapas verticales.
 
-1. **Validación de espesor mínimo**
-   - mínimo general: 20 cm,
-   - mínimo con elementos especiales de borde: 25 cm,
-   - mínimo con vigas de acople: 35 cm,
-   - validación por altura no apoyada: `hw/N/16`.
+La app permite ingresar:
 
-2. **Tipo de análisis para cortante**
-   - fuerza lateral equivalente: `ω = 1.3 + N/30`,
-   - análisis modal espectral: `ω = 1.2 + N/50`.
+- altura máxima de vaciado vertical,
+- tipo de superficie de junta,
+- coeficiente de fricción μ,
+- factor φ para deslizamiento,
+- si se usa Vu amplificado o Vu_junta manual,
+- si se usa Pu o Nu_junta manual.
 
-3. **Tres modos de falla por cortante en memoria**
-   - tensión diagonal,
-   - compresión diagonal,
-   - deslizamiento.
-
-4. **Memoria Word dinámica**
-   - redacta paso a paso el cálculo,
-   - incluye validación de espesor,
-   - incluye imágenes del muro,
-   - se actualiza según los datos ingresados.
+El campo `Coeficiente de fricción μ` incluye ayuda con signo de interrogación en Streamlit; al pasar el mouse se muestran los valores orientativos de rugosidad usados por la app.
