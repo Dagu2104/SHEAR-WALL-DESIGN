@@ -53,6 +53,14 @@ class DatosMuro:
     hw_m: float = 33.66
     n_pisos: int = 11
 
+    # Condiciones geométricas para validación de espesor
+    tiene_vigas_acople: bool = False
+
+    # Tipo de análisis usado para obtener el cortante
+    # "estatico_equivalente" -> omega = 1.3 + N/30
+    # "modal_espectral" -> omega = 1.2 + N/50
+    tipo_analisis_cortante: str = "estatico_equivalente"
+
     # Materiales
     fc_kgcm2: float = 280.0
     fy_kgcm2: float = 4200.0
@@ -149,10 +157,67 @@ class DisenoMuro:
         return "FLEXO_COMPRESION_EN_EL_PLANO"
 
     # --------------------------------------------------------
+    # 0. VALIDACIÓN DE ESPESOR
+    # --------------------------------------------------------
+    def validacion_espesor(self) -> Dict[str, Any]:
+        """
+        Revisa el espesor mínimo del muro con criterios prácticos:
+        - Espesor mínimo general: 20 cm.
+        - Si requiere elementos especiales de borde: 25 cm.
+        - Si tiene vigas de acople: 35 cm.
+        - Además, bw debe ser >= altura no apoyada / 16.
+        La altura no apoyada se estima como hw/N.
+        """
+        altura_no_apoyada_cm = self.hw_cm / max(int(self.d.n_pisos), 1)
+        bw_por_altura_cm = altura_no_apoyada_cm / 16.0
+
+        # Para evitar recursión, se considera que si hay momento en el plano,
+        # el muro se revisa con elementos especiales de borde.
+        requiere_borde = self.modo_diseno() == "FLEXO_COMPRESION_EN_EL_PLANO"
+
+        minimo_general_cm = 20.0
+        minimo_borde_cm = 25.0 if requiere_borde else 20.0
+        minimo_acople_cm = 35.0 if self.d.tiene_vigas_acople else 0.0
+
+        bw_minimo_criterio_cm = max(minimo_general_cm, minimo_borde_cm, minimo_acople_cm)
+        bw_minimo_final_cm = max(bw_minimo_criterio_cm, bw_por_altura_cm)
+
+        controla = []
+        if abs(bw_minimo_final_cm - bw_por_altura_cm) < 1e-9:
+            controla.append("altura no apoyada/16")
+        if abs(bw_minimo_final_cm - bw_minimo_criterio_cm) < 1e-9:
+            if self.d.tiene_vigas_acople and bw_minimo_criterio_cm == minimo_acople_cm:
+                controla.append("vigas de acople")
+            elif requiere_borde and bw_minimo_criterio_cm == minimo_borde_cm:
+                controla.append("elementos especiales de borde")
+            else:
+                controla.append("mínimo general")
+
+        return {
+            "altura_no_apoyada_cm": altura_no_apoyada_cm,
+            "bw_por_altura_cm": bw_por_altura_cm,
+            "requiere_borde_para_espesor": requiere_borde,
+            "tiene_vigas_acople": self.d.tiene_vigas_acople,
+            "minimo_general_cm": minimo_general_cm,
+            "minimo_borde_cm": minimo_borde_cm,
+            "minimo_acople_cm": minimo_acople_cm,
+            "bw_minimo_criterio_cm": bw_minimo_criterio_cm,
+            "bw_minimo_final_cm": bw_minimo_final_cm,
+            "controla_espesor": " y ".join(controla),
+            "cumple_espesor": self.bw_cm >= bw_minimo_final_cm,
+        }
+
+    # --------------------------------------------------------
     # 1. CORTANTE EN EL PLANO
     # --------------------------------------------------------
     def diseno_cortante(self) -> Dict[str, Any]:
-        omega = round(1.3 + self.d.n_pisos / 30.0, 2)
+        if self.d.tipo_analisis_cortante == "modal_espectral":
+            omega_formula = "ω = 1.2 + N/50"
+            omega = round(1.2 + self.d.n_pisos / 50.0, 2)
+        else:
+            omega_formula = "ω = 1.3 + N/30"
+            omega = round(1.3 + self.d.n_pisos / 30.0, 2)
+
         Vu_amplificado = omega * self.d.phi_o * self.d.Vu_tonf
 
         phiVn = (
@@ -174,13 +239,22 @@ class DisenoMuro:
             / (self.d.phi_v * 1.6 * sqrt(self.d.fc_kgcm2) * self.lw_cm)
         )
 
+        cumple_compresion_diagonal = phiVn >= Vu_amplificado
+        acero = self.acero_distribuido()
+        cumple_tension_diagonal = acero["cumple_rho_vertical"] and acero["cumple_rho_horizontal"]
+
         return {
+            "tipo_analisis_cortante": self.d.tipo_analisis_cortante,
+            "omega_formula": omega_formula,
             "omega": omega,
             "Vu_amplificado_tonf": Vu_amplificado,
             "phiVn_tonf": phiVn,
             "lw_req_cm": lw_req,
             "bw_req_cm": bw_req,
-            "cumple_cortante": phiVn >= Vu_amplificado,
+            "cumple_cortante": cumple_compresion_diagonal,
+            "cumple_compresion_diagonal": cumple_compresion_diagonal,
+            "cumple_tension_diagonal": cumple_tension_diagonal,
+            "revision_deslizamiento": "NO EVALUADO: requiere datos de junta, rugosidad, coeficiente de fricción y acero que cruza el plano de deslizamiento.",
         }
 
     # --------------------------------------------------------
@@ -510,6 +584,7 @@ class DisenoMuro:
                 "hw_cm": self.hw_cm,
                 "Ag_cm2": self.Ag_cm2,
             },
+            "espesor": self.validacion_espesor(),
             "cortante": self.diseno_cortante(),
             "flexocompresion_o_compresion": self.diseno_flexocompresion(),
             "borde": self.detallamiento_borde(),
@@ -592,6 +667,7 @@ class DisenoMuro:
     def memoria_markdown(self) -> str:
         r = self.resolver()
         g = r["geometria"]
+        esp = r["espesor"]
         c = r["cortante"]
         fx = r["flexocompresion_o_compresion"]
         b = r["borde"]
@@ -623,16 +699,33 @@ class DisenoMuro:
             lines.append("Se revisan elementos especiales de borde.")
         lines.append("")
 
-        lines.append("## 3. Diseño por cortante en el plano")
-        lines.append(f"- **ω = 1.3 + N/30 = {c['omega']:.2f}**")
+        lines.append("## 3. Validación del espesor mínimo")
+        lines.append("- Inicialmente se revisa que el espesor adoptado del muro cumpla con criterios mínimos de dimensionamiento.")
+        lines.append(f"- Altura no apoyada estimada: **hw/N = {esp['altura_no_apoyada_cm']:.1f} cm**")
+        lines.append(f"- Requisito por esbeltez: **hw_piso/16 = {esp['bw_por_altura_cm']:.1f} cm**")
+        lines.append(f"- Mínimo general considerado: **{esp['minimo_general_cm']:.1f} cm**")
+        lines.append(f"- Mínimo por elementos especiales de borde: **{esp['minimo_borde_cm']:.1f} cm**")
+        if esp["tiene_vigas_acople"]:
+            lines.append(f"- Mínimo por vigas de acople: **{esp['minimo_acople_cm']:.1f} cm**")
+        lines.append(f"- Espesor mínimo final requerido: **{esp['bw_minimo_final_cm']:.1f} cm**")
+        lines.append(f"- Espesor ingresado: **bw = {self.bw_cm:.1f} cm**")
+        lines.append(f"- Controla: **{esp['controla_espesor']}**")
+        lines.append(f"- Veredicto espesor: **{'CUMPLE' if esp['cumple_espesor'] else 'NO CUMPLE'}**")
+        lines.append("")
+
+        lines.append("## 4. Diseño por cortante en el plano")
+        lines.append(f"- Tipo de análisis para cortante: **{c['tipo_analisis_cortante']}**")
+        lines.append(f"- **{c['omega_formula']} = {c['omega']:.2f}**")
         lines.append(f"- **Vu' = ω·φo·Vu = {c['Vu_amplificado_tonf']:.2f} tonf**")
         lines.append(f"- **φVn = {c['phiVn_tonf']:.2f} tonf**")
         lines.append(f"- **lw requerido = {c['lw_req_cm']:.1f} cm**")
         lines.append(f"- **bw requerido = {c['bw_req_cm']:.1f} cm**")
-        lines.append(f"- Veredicto: **{'CUMPLE' if c['cumple_cortante'] else 'NO CUMPLE'}**")
+        lines.append(f"- Compresión diagonal: **{'CUMPLE' if c['cumple_compresion_diagonal'] else 'NO CUMPLE'}**")
+        lines.append(f"- Tensión diagonal: **{'CUMPLE' if c['cumple_tension_diagonal'] else 'NO CUMPLE'}**")
+        lines.append(f"- Deslizamiento: **{c['revision_deslizamiento']}**")
         lines.append("")
 
-        lines.append("## 4. Compresión axial o flexo-compresión")
+        lines.append("## 5. Compresión axial o flexo-compresión")
         if fx["modo"] == "COMPRESION_AXIAL_PREDOMINANTE":
             lines.append(f"- **k·lc/h = {fx['k_lc_h']:.2f}**")
             lines.append(f"- Factor de esbeltez = **{fx['factor_esbeltez']:.4f}**")
@@ -672,7 +765,7 @@ class DisenoMuro:
                 lines.append("- El acero del cabezal colocado se interpreta como **armado de detallamiento/confinamiento**, no como acero exigido por déficit de flexión.")
         lines.append("")
 
-        lines.append("## 5. Elementos especiales de borde / cabezales")
+        lines.append("## 6. Elementos especiales de borde / cabezales")
         if b["requiere_borde_especial"]:
             lines.append("- ¿Requiere elemento especial de borde?: **SÍ**")
             lines.append("- Interpretación: el cabezal se exige por **confinamiento del borde comprimido**, aunque el acero adicional por flexión pueda salir igual a cero.")
@@ -710,7 +803,7 @@ class DisenoMuro:
             lines.append("- No se requieren elementos especiales de borde porque no hay momento en el plano del muro.")
         lines.append("")
 
-        lines.append("## 6. Acero distribuido del alma")
+        lines.append("## 7. Acero distribuido del alma")
         lines.append(f"- Armado adoptado: **{web['detalle']}**")
         lines.append(f"- As por metro en dos caras: **{web['As_por_metro_cm2_m']:.2f} cm²/m**")
         lines.append(f"- Cuantía colocada: **ρ = {web['rho_colocada']:.5f}**")
@@ -718,7 +811,7 @@ class DisenoMuro:
         lines.append(f"- Cuantía horizontal mínima: **{'CUMPLE' if web['cumple_rho_horizontal'] else 'NO CUMPLE'}**")
         lines.append("")
 
-        lines.append("## 7. Validación")
+        lines.append("## 8. Validación")
         if val["aplica_validacion"]:
             lines.append(f"- Validación contra el ejemplo de páginas 128–137: **{'OK' if val['ok_validacion'] else 'REVISAR'}**")
             lines.append(f"- Tolerancia relativa usada: **{val['tolerancia_relativa']:.0%}**")
@@ -1100,6 +1193,7 @@ def generar_memoria_word(datos, muro, fig_long, fig_trans, info_memoria):
     """
     r = muro.resolver()
     g = r["geometria"]
+    esp = r["espesor"]
     c = r["cortante"]
     fx = r["flexocompresion_o_compresion"]
     b = r["borde"]
@@ -1165,6 +1259,8 @@ def generar_memoria_word(datos, muro, fig_long, fig_trans, info_memoria):
         ["bw", f"{datos.bw_m:.2f} m", "Espesor del muro"],
         ["hw", f"{datos.hw_m:.2f} m", "Altura total considerada"],
         ["N", f"{datos.n_pisos}", "Número de pisos"],
+        ["Vigas de acople", "Sí" if datos.tiene_vigas_acople else "No", "Condición para espesor mínimo"],
+        ["Tipo de análisis Vu", datos.tipo_analisis_cortante, "Criterio para factor ω"],
         ["f'c", f"{datos.fc_kgcm2:.0f} kg/cm²", "Resistencia a compresión del hormigón"],
         ["fy", f"{datos.fy_kgcm2:.0f} kg/cm²", "Fluencia del acero longitudinal"],
         ["fyt", f"{datos.fyt_kgcm2:.0f} kg/cm²", "Fluencia del acero transversal"],
@@ -1174,13 +1270,52 @@ def generar_memoria_word(datos, muro, fig_long, fig_trans, info_memoria):
     ]
     add_table_from_rows(doc, datos_rows, col_widths=[1.1, 1.8, 4.2])
 
-    doc.add_heading("3. Revisión por cortante en el plano", level=1)
+    doc.add_heading("3. Validación del espesor mínimo", level=1)
+    doc.add_paragraph(
+        "Inicialmente se determina si el espesor adoptado del muro satisface criterios mínimos de dimensionamiento. "
+        "El largo del muro se establece por condiciones arquitectónicas y estructurales, y la altura corresponde al desarrollo "
+        "vertical del elemento. Por tanto, una de las dimensiones principales por validar es el espesor bw."
+    )
+    doc.add_paragraph(
+        "Para reducir la congestión del armado y mejorar el comportamiento estructural se considera un espesor mínimo general "
+        "de 20 cm. Cuando el muro requiere elementos especiales de borde, el espesor mínimo considerado es 25 cm. "
+        "Si existen vigas de acople, se considera un espesor mínimo práctico de 35 cm para favorecer el anclaje y la colocación "
+        "del refuerzo. Además, se verifica que el espesor sea mayor o igual a la altura no apoyada dividida para 16."
+    )
+    add_equation_paragraph(doc, "Altura no apoyada:", f"h_no_apoyada = hw/N = {datos.hw_m:.2f}/{datos.n_pisos} = {esp['altura_no_apoyada_cm']:.1f} cm")
+    add_equation_paragraph(doc, "Espesor por esbeltez:", f"b_min = h_no_apoyada/16 = {esp['bw_por_altura_cm']:.1f} cm")
+    doc.add_paragraph(
+        f"El espesor mínimo final requerido es {esp['bw_minimo_final_cm']:.1f} cm, controlado por {esp['controla_espesor']}. "
+        f"El espesor ingresado es bw = {datos.bw_m:.2f} m = {muro.bw_cm:.1f} cm, por lo que la validación de espesor "
+        f"{'cumple' if esp['cumple_espesor'] else 'no cumple'}."
+    )
+    esp_rows = [
+        ["Criterio", "Valor"],
+        ["Altura no apoyada hw/N", f"{esp['altura_no_apoyada_cm']:.1f} cm"],
+        ["hw_piso/16", f"{esp['bw_por_altura_cm']:.1f} cm"],
+        ["Mínimo general", f"{esp['minimo_general_cm']:.1f} cm"],
+        ["Mínimo por elementos de borde", f"{esp['minimo_borde_cm']:.1f} cm"],
+        ["Mínimo por vigas de acople", f"{esp['minimo_acople_cm']:.1f} cm" if datos.tiene_vigas_acople else "No aplica"],
+        ["Espesor mínimo final", f"{esp['bw_minimo_final_cm']:.1f} cm"],
+        ["Espesor ingresado", f"{muro.bw_cm:.1f} cm"],
+        ["Veredicto", "CUMPLE" if esp["cumple_espesor"] else "NO CUMPLE"],
+    ]
+    add_table_from_rows(doc, esp_rows, col_widths=[3.0, 2.5])
+
+    doc.add_heading("4. Revisión por cortante en el plano", level=1)
     doc.add_paragraph(
         "El cortante ingresado corresponde al cortante que actúa en el plano del muro. "
         "Para la revisión se amplifica la fuerza de corte mediante el factor dinámico asociado al número de pisos "
         "y el factor de sobrerresistencia."
     )
-    add_equation_paragraph(doc, "Factor dinámico:", f"ω = 1.3 + N/30 = 1.3 + {datos.n_pisos}/30 = {c['omega']:.2f}")
+    doc.add_paragraph(
+        "En el diseño por cortante se consideran tres modos de falla: tensión diagonal, compresión diagonal y deslizamiento. "
+        "La tensión diagonal se controla con el armado longitudinal y transversal distribuido en el alma. La compresión diagonal "
+        "se controla manteniendo el esfuerzo cortante por debajo del límite asociado al espesor del muro y a la resistencia del "
+        "hormigón. El deslizamiento debe revisarse en planos potenciales o juntas de construcción, para lo cual se requieren "
+        "datos adicionales de rugosidad, fricción y acero que cruza el plano de deslizamiento."
+    )
+    add_equation_paragraph(doc, "Factor dinámico:", f"{c['omega_formula']} = {c['omega']:.2f}")
     add_equation_paragraph(doc, "Cortante amplificado:", f"Vu' = ω·φo·Vu = {c['omega']:.2f}·{datos.phi_o:.2f}·{datos.Vu_tonf:.2f} = {c['Vu_amplificado_tonf']:.2f} tonf")
     add_equation_paragraph(doc, "Resistencia a cortante:", f"φVn = φ·1.6·√f'c·bw·lw = {c['phiVn_tonf']:.2f} tonf")
     doc.add_paragraph(
@@ -1196,11 +1331,14 @@ def generar_memoria_word(datos, muro, fig_long, fig_trans, info_memoria):
         ["φVn", f"{c['phiVn_tonf']:.2f} tonf"],
         ["Lw requerido", f"{c['lw_req_cm']:.1f} cm"],
         ["bw requerido", f"{c['bw_req_cm']:.1f} cm"],
+        ["Compresión diagonal", "CUMPLE" if c["cumple_compresion_diagonal"] else "NO CUMPLE"],
+        ["Tensión diagonal", "CUMPLE" if c["cumple_tension_diagonal"] else "NO CUMPLE"],
+        ["Deslizamiento", "NO EVALUADO"],
         ["Veredicto", "CUMPLE" if c["cumple_cortante"] else "NO CUMPLE"],
     ]
     add_table_from_rows(doc, cort_rows, col_widths=[2.4, 2.4])
 
-    doc.add_heading("4. Revisión por flexo-compresión en el plano", level=1)
+    doc.add_heading("5. Revisión por flexo-compresión en el plano", level=1)
     if fx["modo"] == "COMPRESION_AXIAL_PREDOMINANTE":
         doc.add_paragraph(
             "Debido a que el momento en el plano ingresado es igual a cero, el muro se revisa como un elemento "
@@ -1253,7 +1391,7 @@ def generar_memoria_word(datos, muro, fig_long, fig_trans, info_memoria):
         ]
         add_table_from_rows(doc, flex_rows, col_widths=[2.6, 2.4])
 
-    doc.add_heading("5. Elementos especiales de borde o cabezales", level=1)
+    doc.add_heading("6. Elementos especiales de borde o cabezales", level=1)
     if b["requiere_borde_especial"]:
         doc.add_paragraph(
             "Se revisa la necesidad y el detallamiento de los elementos especiales de borde. "
@@ -1286,7 +1424,7 @@ def generar_memoria_word(datos, muro, fig_long, fig_trans, info_memoria):
     else:
         doc.add_paragraph("No se requieren elementos especiales de borde debido a que no existe momento en el plano del muro.")
 
-    doc.add_heading("6. Acero distribuido del alma", level=1)
+    doc.add_heading("7. Acero distribuido del alma", level=1)
     doc.add_paragraph(
         f"El alma del muro se arma con {web['detalle']}. Este acero se dispone en dos caras del muro y se verifica "
         "frente a las cuantías mínimas vertical y horizontal."
@@ -1301,7 +1439,7 @@ def generar_memoria_word(datos, muro, fig_long, fig_trans, info_memoria):
     ]
     add_table_from_rows(doc, web_rows, col_widths=[2.6, 3.4])
 
-    doc.add_heading("7. Esquemas de armado", level=1)
+    doc.add_heading("8. Esquemas de armado", level=1)
     doc.add_paragraph(
         "A continuación se presentan los esquemas gráficos generados con los datos ingresados. "
         "Las figuras son referenciales para la memoria y muestran la ubicación de los elementos de borde, "
@@ -1325,8 +1463,9 @@ def generar_memoria_word(datos, muro, fig_long, fig_trans, info_memoria):
         p.add_run("Figura 2. Corte transversal en planta del muro.").bold = True
         doc.add_picture(str(trans_path), width=Inches(6.5))
 
-    doc.add_heading("8. Conclusión", level=1)
+    doc.add_heading("9. Conclusión", level=1)
     conclusiones = []
+    conclusiones.append("La validación del espesor mínimo " + ("cumple." if esp["cumple_espesor"] else "no cumple."))
     conclusiones.append("La revisión por cortante en el plano del muro " + ("cumple." if c["cumple_cortante"] else "no cumple."))
     if fx["modo"] == "FLEXO_COMPRESION_EN_EL_PLANO":
         conclusiones.append("La revisión del acero adicional de borde por flexión " + ("cumple." if fx["cumple_acero_borde"] else "no cumple."))
@@ -1360,6 +1499,11 @@ def main():
         bw_m = st.number_input("Espesor del muro, bw [m]", min_value=0.05, value=0.30, step=0.01, format="%.2f")
         hw_m = st.number_input("Altura total del muro, hw [m]", min_value=0.50, value=33.66, step=0.10, format="%.2f")
         n_pisos = st.number_input("Número de pisos, N", min_value=1, value=11, step=1)
+        tiene_vigas_acople = st.checkbox(
+            "El muro tiene vigas de acople",
+            value=False,
+            help="Si se activa, se exige espesor mínimo práctico de 35 cm."
+        )
 
         with st.expander("Identificación para memoria Word"):
             nombre_proyecto = st.text_input("Nombre del proyecto", value="Proyecto estructural")
@@ -1376,6 +1520,12 @@ def main():
         fyt_kgcm2 = st.number_input("fyt transversal [kg/cm²]", min_value=2000.0, value=4200.0, step=100.0, format="%.0f")
 
         st.subheader("3. Solicitaciones")
+        tipo_analisis_cortante_ui = st.selectbox(
+            "Tipo de análisis usado para Vu",
+            ["Fuerza lateral equivalente", "Análisis modal espectral"],
+            index=0
+        )
+        tipo_analisis_cortante = "modal_espectral" if tipo_analisis_cortante_ui == "Análisis modal espectral" else "estatico_equivalente"
         Pu_tonf = st.number_input("Pu [tonf]", min_value=0.0, value=352.0, step=1.0, format="%.2f")
         Vu_tonf = st.number_input("Vu de análisis [tonf]", min_value=0.0, value=60.0, step=1.0, format="%.2f")
         Mu_plano_tonfm = st.number_input("Mu en el plano [t·m]", min_value=0.0, value=1875.0, step=1.0, format="%.2f")
@@ -1444,6 +1594,8 @@ def main():
         bw_m=bw_m,
         hw_m=hw_m,
         n_pisos=int(n_pisos),
+        tiene_vigas_acople=tiene_vigas_acople,
+        tipo_analisis_cortante=tipo_analisis_cortante,
         fc_kgcm2=fc_kgcm2,
         fy_kgcm2=fy_kgcm2,
         fyt_kgcm2=fyt_kgcm2,
@@ -1484,19 +1636,21 @@ def main():
     muro = DisenoMuro(datos)
     resultados = muro.resolver()
     fx = resultados["flexocompresion_o_compresion"]
+    espesor = resultados["espesor"]
     cortante = resultados["cortante"]
     borde = resultados["borde"]
     web = resultados["acero_distribuido"]
 
     st.subheader("Resumen rápido")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Modo", resultados["modo"].replace("_", " "))
-    col2.metric("Vu' [tonf]", f"{cortante['Vu_amplificado_tonf']:.2f}")
-    col3.metric("Cortante", "CUMPLE" if cortante["cumple_cortante"] else "NO CUMPLE")
+    col2.metric("Espesor", "CUMPLE" if espesor["cumple_espesor"] else "NO CUMPLE")
+    col3.metric("Vu' [tonf]", f"{cortante['Vu_amplificado_tonf']:.2f}")
+    col4.metric("Cortante", "CUMPLE" if cortante["cumple_cortante"] else "NO CUMPLE")
     if fx["modo"] == "FLEXO_COMPRESION_EN_EL_PLANO":
-        col4.metric("Acero borde", "CUMPLE" if fx["cumple_acero_borde"] else "NO CUMPLE")
+        col5.metric("Acero borde", "CUMPLE" if fx["cumple_acero_borde"] else "NO CUMPLE")
     else:
-        col4.metric("Axial", "CUMPLE" if fx["cumple_axial"] else "NO CUMPLE")
+        col5.metric("Axial", "CUMPLE" if fx["cumple_axial"] else "NO CUMPLE")
 
     tab_memoria, tab_graficos, tab_tablas, tab_validacion = st.tabs(["Memoria", "Gráficos", "Tablas", "Validación"] )
 
@@ -1554,6 +1708,8 @@ def main():
     with tab_tablas:
         st.markdown("### Geometría")
         st.dataframe(dict_to_df(resultados["geometria"]), use_container_width=True)
+        st.markdown("### Espesor")
+        st.dataframe(dict_to_df(espesor), use_container_width=True)
         st.markdown("### Cortante")
         st.dataframe(dict_to_df(cortante), use_container_width=True)
         st.markdown("### Flexo-compresión o compresión")
