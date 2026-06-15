@@ -3,9 +3,17 @@
 # Basado en el código de diseño de muro con As1 calculado con acero real del alma.
 
 import io
+import tempfile
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
+
+from docx import Document
+from docx.shared import Inches, Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
 
 
 from dataclasses import dataclass, asdict
@@ -1043,6 +1051,297 @@ def dict_to_df(d):
     return pd.DataFrame(rows)
 
 
+
+def set_cell_text(cell, text, bold=False):
+    cell.text = ""
+    p = cell.paragraphs[0]
+    r = p.add_run(str(text))
+    r.bold = bold
+    for paragraph in cell.paragraphs:
+        for run in paragraph.runs:
+            run.font.size = Pt(9)
+    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+
+
+def add_table_from_rows(doc, rows, col_widths=None):
+    table = doc.add_table(rows=1, cols=len(rows[0]))
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.style = "Table Grid"
+
+    hdr = table.rows[0].cells
+    for j, value in enumerate(rows[0]):
+        set_cell_text(hdr[j], value, bold=True)
+
+    for row in rows[1:]:
+        cells = table.add_row().cells
+        for j, value in enumerate(row):
+            set_cell_text(cells[j], value)
+
+    if col_widths:
+        for row in table.rows:
+            for j, w in enumerate(col_widths):
+                row.cells[j].width = Inches(w)
+
+    return table
+
+
+def add_equation_paragraph(doc, label, expression):
+    p = doc.add_paragraph()
+    p.paragraph_format.space_after = Pt(2)
+    run = p.add_run(label)
+    run.bold = True
+    p.add_run(" " + expression)
+
+
+def generar_memoria_word(datos, muro, fig_long, fig_trans, info_memoria):
+    """
+    Genera una memoria de cálculo en Word con redacción dinámica,
+    pasos explicativos, resultados y figuras.
+    """
+    r = muro.resolver()
+    g = r["geometria"]
+    c = r["cortante"]
+    fx = r["flexocompresion_o_compresion"]
+    b = r["borde"]
+    web = r["acero_distribuido"]
+
+    doc = Document()
+
+    # Márgenes
+    section = doc.sections[0]
+    section.top_margin = Inches(0.65)
+    section.bottom_margin = Inches(0.65)
+    section.left_margin = Inches(0.75)
+    section.right_margin = Inches(0.75)
+
+    styles = doc.styles
+    styles["Normal"].font.name = "Arial"
+    styles["Normal"].font.size = Pt(10)
+    styles["Heading 1"].font.name = "Arial"
+    styles["Heading 2"].font.name = "Arial"
+    styles["Heading 3"].font.name = "Arial"
+
+    title = doc.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    rt = title.add_run("MEMORIA DE CÁLCULO\nDISEÑO DE MURO ESTRUCTURAL")
+    rt.bold = True
+    rt.font.size = Pt(15)
+
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.add_run(info_memoria.get("nombre_proyecto", "Proyecto estructural")).bold = True
+
+    meta_rows = [
+        ["Elemento", info_memoria.get("nombre_muro", "Muro de corte")],
+        ["Ejes", f"{info_memoria.get('eje_inicial', '#')} - {info_memoria.get('eje_final', '#')}"],
+        ["Niveles", f"{info_memoria.get('nivel_inicial', '##')} a {info_memoria.get('nivel_final', '##')}"],
+        ["Altura considerada", f"{datos.hw_m:.2f} m"],
+        ["Longitud del muro", f"{datos.lw_m:.2f} m"],
+        ["Espesor del muro", f"{datos.bw_m:.2f} m"],
+    ]
+    if info_memoria.get("autor_memoria", "").strip():
+        meta_rows.append(["Elaborado por", info_memoria.get("autor_memoria")])
+    add_table_from_rows(doc, [["Dato", "Descripción"]] + meta_rows, col_widths=[1.7, 4.8])
+
+    doc.add_heading("1. Alcance del cálculo", level=1)
+    doc.add_paragraph(
+        f"En el presente capítulo se muestra el cálculo para obtener el espesor y el armado del "
+        f"{info_memoria.get('nombre_muro', 'muro de corte')}, ubicado entre los ejes "
+        f"{info_memoria.get('eje_inicial', '#')}-{info_memoria.get('eje_final', '#')}. "
+        f"El muro tiene una longitud Lw = {datos.lw_m:.2f} m y un espesor bw = {datos.bw_m:.2f} m. "
+        f"El elemento se desarrolla desde el nivel {info_memoria.get('nivel_inicial', '##')} hasta el nivel "
+        f"{info_memoria.get('nivel_final', '##')}, por lo que se considera una altura total hw = {datos.hw_m:.2f} m."
+    )
+    doc.add_paragraph(
+        "El diseño se realiza considerando el comportamiento del muro en su plano, revisando la demanda de "
+        "cortante amplificada, la flexo-compresión, el acero distribuido del alma y el detallamiento de los "
+        "elementos especiales de borde o cabezales."
+    )
+
+    doc.add_heading("2. Datos de entrada", level=1)
+    datos_rows = [
+        ["Parámetro", "Valor", "Descripción"],
+        ["Lw", f"{datos.lw_m:.2f} m", "Longitud total del muro"],
+        ["bw", f"{datos.bw_m:.2f} m", "Espesor del muro"],
+        ["hw", f"{datos.hw_m:.2f} m", "Altura total considerada"],
+        ["N", f"{datos.n_pisos}", "Número de pisos"],
+        ["f'c", f"{datos.fc_kgcm2:.0f} kg/cm²", "Resistencia a compresión del hormigón"],
+        ["fy", f"{datos.fy_kgcm2:.0f} kg/cm²", "Fluencia del acero longitudinal"],
+        ["fyt", f"{datos.fyt_kgcm2:.0f} kg/cm²", "Fluencia del acero transversal"],
+        ["Pu", f"{datos.Pu_tonf:.2f} tonf", "Carga axial última"],
+        ["Vu", f"{datos.Vu_tonf:.2f} tonf", "Cortante de análisis en el plano del muro"],
+        ["Mu", f"{datos.Mu_plano_tonfm:.2f} t·m", "Momento último en el plano del muro"],
+    ]
+    add_table_from_rows(doc, datos_rows, col_widths=[1.1, 1.8, 4.2])
+
+    doc.add_heading("3. Revisión por cortante en el plano", level=1)
+    doc.add_paragraph(
+        "El cortante ingresado corresponde al cortante que actúa en el plano del muro. "
+        "Para la revisión se amplifica la fuerza de corte mediante el factor dinámico asociado al número de pisos "
+        "y el factor de sobrerresistencia."
+    )
+    add_equation_paragraph(doc, "Factor dinámico:", f"ω = 1.3 + N/30 = 1.3 + {datos.n_pisos}/30 = {c['omega']:.2f}")
+    add_equation_paragraph(doc, "Cortante amplificado:", f"Vu' = ω·φo·Vu = {c['omega']:.2f}·{datos.phi_o:.2f}·{datos.Vu_tonf:.2f} = {c['Vu_amplificado_tonf']:.2f} tonf")
+    add_equation_paragraph(doc, "Resistencia a cortante:", f"φVn = φ·1.6·√f'c·bw·lw = {c['phiVn_tonf']:.2f} tonf")
+    doc.add_paragraph(
+        f"Con la geometría adoptada se obtiene φVn = {c['phiVn_tonf']:.2f} tonf, "
+        f"mientras que el cortante amplificado es Vu' = {c['Vu_amplificado_tonf']:.2f} tonf. "
+        f"Por lo tanto, la revisión por cortante en el plano del muro "
+        f"{'cumple' if c['cumple_cortante'] else 'no cumple'}."
+    )
+
+    cort_rows = [
+        ["Resultado", "Valor"],
+        ["Vu amplificado", f"{c['Vu_amplificado_tonf']:.2f} tonf"],
+        ["φVn", f"{c['phiVn_tonf']:.2f} tonf"],
+        ["Lw requerido", f"{c['lw_req_cm']:.1f} cm"],
+        ["bw requerido", f"{c['bw_req_cm']:.1f} cm"],
+        ["Veredicto", "CUMPLE" if c["cumple_cortante"] else "NO CUMPLE"],
+    ]
+    add_table_from_rows(doc, cort_rows, col_widths=[2.4, 2.4])
+
+    doc.add_heading("4. Revisión por flexo-compresión en el plano", level=1)
+    if fx["modo"] == "COMPRESION_AXIAL_PREDOMINANTE":
+        doc.add_paragraph(
+            "Debido a que el momento en el plano ingresado es igual a cero, el muro se revisa como un elemento "
+            "con compresión axial predominante."
+        )
+        add_equation_paragraph(doc, "Resistencia axial:", f"φPn = {fx['phiPn_tonf']:.2f} tonf")
+        doc.add_paragraph(
+            f"La resistencia axial de diseño φPn = {fx['phiPn_tonf']:.2f} tonf se compara con "
+            f"Pu = {datos.Pu_tonf:.2f} tonf. La revisión axial "
+            f"{'cumple' if fx['cumple_axial'] else 'no cumple'}."
+        )
+    else:
+        doc.add_paragraph(
+            "Para el diseño a flexo-compresión se calcula el momento nominal requerido a partir del momento último "
+            "y del factor de reducción de resistencia a flexión. Luego se considera el aporte del acero distribuido "
+            "vertical real colocado en el alma del muro y se obtiene el acero adicional requerido en los cabezales."
+        )
+        add_equation_paragraph(doc, "Momento nominal:", f"Mn = Mu/φ = {datos.Mu_plano_tonfm:.2f}/{datos.phi_flexion:.2f} = {fx['Mn_tonfm']:.2f} t·m")
+        add_equation_paragraph(doc, "Brazo de la carga axial:", f"xp = {datos.xp_factor_lw:.3f}·Lw = {fx['xp_m']:.3f} m")
+        add_equation_paragraph(doc, "Acero vertical del alma:", f"As1 = As/m · 0.60Lw = {fx['As_vertical_alma_por_metro_cm2_m']:.2f}·{fx['longitud_alma_efectiva_m']:.2f} = {fx['As1_cm2']:.2f} cm²")
+        add_equation_paragraph(doc, "Tracción aportada por el alma:", f"Ts1 = As1·fy = {fx['Ts1_tonf']:.2f} tonf")
+        add_equation_paragraph(doc, "Tracción restante:", f"Ts2 = {fx['Ts2_tonf']:.2f} tonf")
+        add_equation_paragraph(doc, "Acero adicional de borde:", f"As2 = Ts2/fy = {fx['As2_req_cm2']:.2f} cm²")
+
+        if fx["requiere_acero_adicional_borde_por_flexion"]:
+            doc.add_paragraph(
+                f"El acero adicional requerido por flexión en cada cabezal es As2 = {fx['As2_req_cm2']:.2f} cm². "
+                f"Con barras Ø{datos.db_borde_mm:.0f} mm, el armado mínimo equivalente es "
+                f"{fx['armado_borde_requerido_minimo']}. El usuario ha colocado {fx['armado_borde']}, "
+                f"con un área As = {fx['As2_colocado_cm2']:.2f} cm², por lo que el acero de borde "
+                f"{'cumple' if fx['cumple_acero_borde'] else 'no cumple'}."
+            )
+        else:
+            doc.add_paragraph(
+                "El equilibrio indica que no se requiere acero adicional de borde por flexión, ya que el acero vertical "
+                "distribuido del alma cubre la tracción necesaria. Sin embargo, el cabezal puede seguir siendo necesario "
+                "por criterios de confinamiento del borde comprimido."
+            )
+
+        flex_rows = [
+            ["Resultado", "Valor"],
+            ["Mn", f"{fx['Mn_tonfm']:.2f} t·m"],
+            ["xp", f"{fx['xp_m']:.3f} m"],
+            ["As1 real aportante", f"{fx['As1_cm2']:.2f} cm²"],
+            ["Ts1", f"{fx['Ts1_tonf']:.2f} tonf"],
+            ["Ts2", f"{fx['Ts2_tonf']:.2f} tonf"],
+            ["As2 requerido", f"{fx['As2_req_cm2']:.2f} cm²"],
+            ["As2 colocado", f"{fx['As2_colocado_cm2']:.2f} cm²"],
+            ["Veredicto", "CUMPLE" if fx["cumple_acero_borde"] else "NO CUMPLE"],
+        ]
+        add_table_from_rows(doc, flex_rows, col_widths=[2.6, 2.4])
+
+    doc.add_heading("5. Elementos especiales de borde o cabezales", level=1)
+    if b["requiere_borde_especial"]:
+        doc.add_paragraph(
+            "Se revisa la necesidad y el detallamiento de los elementos especiales de borde. "
+            "El desplazamiento máximo de techo se utiliza para calcular la relación δu/hw y, con ello, "
+            "la profundidad del eje neutro asociada al criterio de borde."
+        )
+        add_equation_paragraph(doc, "Relación de desplazamiento:", f"δu/hw = {b['desplazamiento_techo_cm']:.2f}/{datos.hw_m*100:.1f} = {b['delta_u_sobre_hw']:.6f}")
+        add_equation_paragraph(doc, "Profundidad calculada:", f"c = {b['c_cm']:.1f} cm; c/Lw = {b['c_sobre_lw']:.3f}")
+        add_equation_paragraph(doc, "Longitud del elemento de borde:", f"lbe = max(c - 0.10Lw, c/2) = {b['lbe_cm']:.1f} cm")
+        doc.add_paragraph(
+            f"Con estos valores se adopta una longitud de elemento de borde lbe = {b['lbe_cm']:.1f} cm en cada extremo del muro. "
+            f"El espaciamiento de estribos resulta s = {b['s_estribos_cm']:.1f} cm, controlado por {b['controla_s']}."
+        )
+        borde_rows = [
+            ["Resultado", "Valor"],
+            ["Pu/(Ag·f'c)", f"{b['Pu_sobre_Agfc']:.3f}"],
+            ["δu", f"{b['desplazamiento_techo_cm']:.2f} cm"],
+            ["δu/hw", f"{b['delta_u_sobre_hw']:.6f}"],
+            ["c", f"{b['c_cm']:.1f} cm"],
+            ["c/Lw", f"{b['c_sobre_lw']:.3f}"],
+            ["lbe", f"{b['lbe_cm']:.1f} cm"],
+            ["ldh", f"{b['ldh_cm']:.1f} cm"],
+            ["hx usado", f"{b['hx_mm']:.0f} mm"],
+            ["s estribos", f"{b['s_estribos_cm']:.1f} cm"],
+            ["Ash1", f"{b['Ash1_req_cm2']:.2f} cm² → {b['n_ramas_Ash1']} ramas"],
+            ["Ash2", f"{b['Ash2_req_cm2']:.2f} cm² → {b['n_ramas_Ash2']} ramas"],
+            ["Detalle", b["detalle_estribos"]],
+        ]
+        add_table_from_rows(doc, borde_rows, col_widths=[2.5, 3.2])
+    else:
+        doc.add_paragraph("No se requieren elementos especiales de borde debido a que no existe momento en el plano del muro.")
+
+    doc.add_heading("6. Acero distribuido del alma", level=1)
+    doc.add_paragraph(
+        f"El alma del muro se arma con {web['detalle']}. Este acero se dispone en dos caras del muro y se verifica "
+        "frente a las cuantías mínimas vertical y horizontal."
+    )
+    web_rows = [
+        ["Resultado", "Valor"],
+        ["Armado adoptado", web["detalle"]],
+        ["As por metro", f"{web['As_por_metro_cm2_m']:.2f} cm²/m"],
+        ["Cuantía colocada", f"{web['rho_colocada']:.5f}"],
+        ["Cuantía vertical mínima", "CUMPLE" if web["cumple_rho_vertical"] else "NO CUMPLE"],
+        ["Cuantía horizontal mínima", "CUMPLE" if web["cumple_rho_horizontal"] else "NO CUMPLE"],
+    ]
+    add_table_from_rows(doc, web_rows, col_widths=[2.6, 3.4])
+
+    doc.add_heading("7. Esquemas de armado", level=1)
+    doc.add_paragraph(
+        "A continuación se presentan los esquemas gráficos generados con los datos ingresados. "
+        "Las figuras son referenciales para la memoria y muestran la ubicación de los elementos de borde, "
+        "el acero distribuido del alma, estribos, vinchas y ganchos."
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        long_path = tmpdir / "corte_longitudinal.png"
+        trans_path = tmpdir / "corte_transversal.png"
+        fig_long.savefig(long_path, dpi=220, bbox_inches="tight")
+        fig_trans.savefig(trans_path, dpi=220, bbox_inches="tight")
+
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.add_run("Figura 1. Corte longitudinal del muro.").bold = True
+        doc.add_picture(str(long_path), width=Inches(5.8))
+
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.add_run("Figura 2. Corte transversal en planta del muro.").bold = True
+        doc.add_picture(str(trans_path), width=Inches(6.5))
+
+    doc.add_heading("8. Conclusión", level=1)
+    conclusiones = []
+    conclusiones.append("La revisión por cortante en el plano del muro " + ("cumple." if c["cumple_cortante"] else "no cumple."))
+    if fx["modo"] == "FLEXO_COMPRESION_EN_EL_PLANO":
+        conclusiones.append("La revisión del acero adicional de borde por flexión " + ("cumple." if fx["cumple_acero_borde"] else "no cumple."))
+    else:
+        conclusiones.append("La revisión por compresión axial predominante " + ("cumple." if fx["cumple_axial"] else "no cumple."))
+    conclusiones.append("El acero distribuido del alma " + ("cumple las cuantías mínimas." if web["cumple_rho_vertical"] and web["cumple_rho_horizontal"] else "no cumple alguna cuantía mínima."))
+    for item in conclusiones:
+        doc.add_paragraph(item, style=None)
+
+    bio = io.BytesIO()
+    doc.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
+
+
 def main():
     st.set_page_config(
         page_title="Diseño de muro estructural",
@@ -1061,6 +1360,15 @@ def main():
         bw_m = st.number_input("Espesor del muro, bw [m]", min_value=0.05, value=0.30, step=0.01, format="%.2f")
         hw_m = st.number_input("Altura total del muro, hw [m]", min_value=0.50, value=33.66, step=0.10, format="%.2f")
         n_pisos = st.number_input("Número de pisos, N", min_value=1, value=11, step=1)
+
+        with st.expander("Identificación para memoria Word"):
+            nombre_proyecto = st.text_input("Nombre del proyecto", value="Proyecto estructural")
+            nombre_muro = st.text_input("Identificación del muro", value="Muro de corte M-01")
+            eje_inicial = st.text_input("Eje inicial", value="A")
+            eje_final = st.text_input("Eje final", value="B")
+            nivel_inicial = st.text_input("Nivel inicial", value="N+0.00")
+            nivel_final = st.text_input("Nivel final", value="N+15.00")
+            autor_memoria = st.text_input("Elaborado por", value="")
 
         st.subheader("2. Materiales")
         fc_kgcm2 = st.number_input("f'c [kg/cm²]", min_value=100.0, value=280.0, step=10.0, format="%.0f")
@@ -1163,6 +1471,16 @@ def main():
         hx_manual_mm=hx_manual_mm,
     )
 
+    info_memoria = {
+        "nombre_proyecto": nombre_proyecto,
+        "nombre_muro": nombre_muro,
+        "eje_inicial": eje_inicial,
+        "eje_final": eje_final,
+        "nivel_inicial": nivel_inicial,
+        "nivel_final": nivel_final,
+        "autor_memoria": autor_memoria,
+    }
+
     muro = DisenoMuro(datos)
     resultados = muro.resolver()
     fx = resultados["flexocompresion_o_compresion"]
@@ -1185,6 +1503,22 @@ def main():
     with tab_memoria:
         memoria = muro.memoria_markdown()
         st.markdown(memoria)
+
+        # Figuras para insertar en la memoria Word.
+        fig_long_docx, ax_long_docx = plt.subplots(figsize=(9, 7))
+        muro.plot_corte_longitudinal(ax=ax_long_docx)
+        fig_trans_docx, ax_trans_docx = plt.subplots(figsize=(13, 5))
+        muro.plot_corte_transversal(ax=ax_trans_docx)
+
+        memoria_word = generar_memoria_word(datos, muro, fig_long_docx, fig_trans_docx, info_memoria)
+
+        st.download_button(
+            "Descargar memoria Word (.docx)",
+            data=memoria_word,
+            file_name="memoria_calculo_muro.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
         st.download_button(
             "Descargar memoria Markdown",
             data=memoria.encode("utf-8"),
